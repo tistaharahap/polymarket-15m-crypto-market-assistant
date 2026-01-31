@@ -37,20 +37,21 @@ npm run web
 ```
 
 ### Endpoints
-- Snapshot (single response):
+- Market metadata snapshot (lightweight):
   - `/api/snapshot?asset=btc|eth|xrp|sol`
-- Live stream (SSE):
-  - `/api/stream?asset=btc|eth|xrp|sol`
 
-### Data flow
-- **HTTP requests to third-party sources are proxied server-side** via Next.js route handlers.
-  - Binance (klines + last price)
-  - Polymarket Gamma / CLOB (market discovery + outcome prices + book summaries)
-- **Current Price** is fetched **client-side** from Polymarket’s live-data WebSocket:
-  - `wss://ws-live-data.polymarket.com`
-- **Price to Beat** is latched client-side:
-  - first WS tick at/after the market start time
-  - resets on market slug rollover
+### Data flow (client-first)
+- **Binance candles + last price**
+  - Client does a **one-time HTTP seed** per tab: `/api/v3/klines?interval=1m&limit=240`
+  - Then switches to **Binance WebSocket** streams for live updates (`@kline_1m` + `@trade`).
+  - All TA calculations (VWAP/RSI/MACD/Heiken + scoring/edge/decision) happen in the browser.
+- **Polymarket**
+  - Server provides market metadata (slug/start/end + token IDs) via `/api/snapshot`.
+  - Client uses Polymarket WS:
+    - RTDS live price: `wss://ws-live-data.polymarket.com`
+    - CLOB best bid/ask: `wss://ws-subscriptions-clob.polymarket.com/ws/market`
+- **Price to Beat**
+  - Latched client-side: first Polymarket WS tick at/after market start.
 
 ---
 
