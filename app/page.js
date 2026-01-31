@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { connectPolymarketChainlinkWs } from "./_ws/polymarketPrice";
 import { connectClobMarketWs } from "./_ws/clobMarket";
 
@@ -103,19 +103,29 @@ export default function Page() {
   const activePtb = ptbByAsset[activeAsset] ?? { value: null, setAtMs: null, marketSlug: null };
   const activeBbo = clobByAsset[activeAsset] ?? { up: null, down: null };
 
-  // SSE: only keep one EventSource alive for the active tab.
-  useAssetStream({
-    asset: activeAsset,
-    enabled: true,
-    onSnapshot: (j) => {
+  const handleSnapshot = useCallback(
+    (j) => {
       setSnapByAsset((prev) => ({ ...prev, [activeAsset]: j }));
       setErrByAsset((prev) => ({ ...prev, [activeAsset]: null }));
       setLoadingByAsset((prev) => ({ ...prev, [activeAsset]: false }));
     },
-    onError: (msg) => {
+    [activeAsset]
+  );
+
+  const handleStreamError = useCallback(
+    (msg) => {
       setErrByAsset((prev) => ({ ...prev, [activeAsset]: msg }));
       setLoadingByAsset((prev) => ({ ...prev, [activeAsset]: false }));
-    }
+    },
+    [activeAsset]
+  );
+
+  // SSE: only keep one EventSource alive for the active tab.
+  useAssetStream({
+    asset: activeAsset,
+    enabled: true,
+    onSnapshot: handleSnapshot,
+    onError: handleStreamError
   });
 
   // Client WS (Polymarket RTDS): connect only for active tab (CURRENT PRICE)
