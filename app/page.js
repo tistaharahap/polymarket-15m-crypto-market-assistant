@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { connectPolymarketChainlinkWs } from "./_ws/polymarketPrice";
 
 function fmtNum(n, digits = 0) {
   if (n === null || n === undefined || !Number.isFinite(Number(n))) return "-";
@@ -40,9 +41,17 @@ export default function Page() {
   const [err, setErr] = useState(null);
   const [loading, setLoading] = useState(true);
   const [auto, setAuto] = useState(true);
+  const [wsPrice, setWsPrice] = useState(null);
+  const [wsUpdatedAt, setWsUpdatedAt] = useState(null);
+  const [priceToBeat, setPriceToBeat] = useState(null);
+  const [priceToBeatSetAt, setPriceToBeatSetAt] = useState(null);
+  const [ptbMarketSlug, setPtbMarketSlug] = useState(null);
+
   // streaming mode; no polling tick needed
   const abortRef = useRef(null);
+  const wsRef = useRef(null);
 
+  // SSE stream for server-proxied snapshot (markets/indicators/edges)
   useEffect(() => {
     abortRef.current?.abort?.();
 
@@ -80,6 +89,46 @@ export default function Page() {
       es.close();
     };
   }, [auto]);
+
+  // Client WS for CURRENT PRICE (Polymarket live-data WS)
+  useEffect(() => {
+    // always keep the WS alive (even when auto is off) so price-to-beat can latch correctly
+    wsRef.current?.close?.();
+
+    const c = connectPolymarketChainlinkWs({
+      onTick: ({ price, updatedAtMs }) => {
+        setWsPrice(price);
+        setWsUpdatedAt(updatedAtMs);
+      }
+    });
+
+    wsRef.current = c;
+    return () => c?.close?.();
+  }, []);
+
+  // Latch price-to-beat once per market window using WS price + market start time.
+  useEffect(() => {
+    const marketSlug = data?.polymarket?.marketSlug ?? null;
+    const startTime = data?.polymarket?.marketStartTime ?? null;
+    const startMs = startTime ? new Date(startTime).getTime() : null;
+
+    if (marketSlug && marketSlug !== ptbMarketSlug) {
+      setPtbMarketSlug(marketSlug);
+      setPriceToBeat(null);
+      setPriceToBeatSetAt(null);
+    }
+
+    if (!marketSlug) return;
+    if (priceToBeat !== null) return;
+    if (wsPrice === null) return;
+
+    const nowMs = Date.now();
+    const okToLatch = startMs === null ? true : Number.isFinite(startMs) && nowMs >= startMs;
+    if (!okToLatch) return;
+
+    setPriceToBeat(wsPrice);
+    setPriceToBeatSetAt(nowMs);
+  }, [data?.polymarket?.marketSlug, data?.polymarket?.marketStartTime, wsPrice, ptbMarketSlug, priceToBeat]);
 
   async function refresh() {
     // manual refresh uses snapshot endpoint once
@@ -127,7 +176,7 @@ export default function Page() {
         <div className="brand">
           <div className="h1">BTC 15m Assistant</div>
           <div className="sub">
-            Web UI overlay for the existing engine. Client only talks to Next.js API routes—external data stays server-side.
+            Web UI overlay for the existing engine. Market/indicators are server-proxied. Current price uses a direct Polymarket WS connection (by design).
           </div>
         </div>
 
@@ -206,13 +255,12 @@ export default function Page() {
 
             <div style={{ height: 12 }} />
 
-            <div className="kv"><div className="k">Strike price</div><div className="v mono">{fmtUsd(data?.polymarket?.strikePrice, 0)}</div></div>
-            <div className="kv"><div className="k">Price to beat</div><div className="v mono">{fmtUsd(data?.priceToBeat?.value, 0)}</div></div>
-            <div className="kv"><div className="k">Δ vs price to beat</div><div className="v mono">{(data?.prices?.chainlink !== null && data?.prices?.chainlink !== undefined && data?.priceToBeat?.value !== null && data?.priceToBeat?.value !== undefined) ? `${data.prices.chainlink - data.priceToBeat.value > 0 ? "+" : "-"}${fmtUsd(Math.abs(data.prices.chainlink - data.priceToBeat.value), 2)}` : "-"}</div></div>
+            <div className="kv"><div className="k">Price to beat</div><div className="v mono">{fmtUsd(priceToBeat, 0)}</div></div>
+            <div className="kv"><div className="k">Δ vs price to beat</div><div className="v mono">{(wsPrice !== null && priceToBeat !== null) ? `${wsPrice - priceToBeat > 0 ? "+" : "-"}${fmtUsd(Math.abs(wsPrice - priceToBeat), 2)}` : "-"}</div></div>
 
             <div style={{ height: 12 }} />
 
-            <div className="kv"><div className="k">Chainlink BTC/USD</div><div className="v mono">{fmtUsd(data?.prices?.chainlink, 2)}</div></div>
+            <div className="kv"><div className="k">Current price (Polymarket WS)</div><div className="v mono">{fmtUsd(wsPrice, 2)}</div></div>
             <div className="kv"><div className="k">Binance BTCUSDT</div><div className="v mono">{fmtUsd(data?.prices?.binance, 0)}</div></div>
             <div className="kv"><div className="k">Diff</div><div className="v mono">{data?.prices?.diffUsd !== null && data?.prices?.diffUsd !== undefined ? `${data.prices.diffUsd > 0 ? "+" : "-"}${fmtUsd(Math.abs(data.prices.diffUsd), 2)} (${(data?.prices?.diffPct ?? 0) > 0 ? "+" : "-"}${Math.abs(data?.prices?.diffPct ?? 0).toFixed(2)}%)` : "-"}</div></div>
 

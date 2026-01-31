@@ -14,8 +14,6 @@ function sseEncode({ event, data, id } = {}) {
 }
 
 export async function GET() {
-  // Per-connection state (for CLI-like latching behavior)
-  const state = { marketSlug: null, value: null, setAtMs: null };
 
   const encoder = new TextEncoder();
   let timer = null;
@@ -26,7 +24,7 @@ export async function GET() {
       const send = async () => {
         counter += 1;
         try {
-          const snap = await computeSnapshot({ state });
+          const snap = await computeSnapshot();
           controller.enqueue(
             encoder.encode(
               sseEncode({ event: "snapshot", id: counter, data: JSON.stringify(snap) })

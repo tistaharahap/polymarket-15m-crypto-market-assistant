@@ -91,71 +91,8 @@ async function resolveCurrentBtc15mMarket(nowMs = Date.now()) {
   return picked;
 }
 
-function parsePriceToBeatFromText(market) {
-  const text = String(market?.question ?? market?.title ?? "");
-  if (!text) return null;
-  const m = text.match(/price\s*to\s*beat[^\d$]*\$?\s*([0-9][0-9,]*(?:\.[0-9]+)?)/i);
-  if (!m) return null;
-  const raw = m[1].replace(/,/g, "");
-  const n = Number(raw);
-  return Number.isFinite(n) ? n : null;
-}
-
-function extractNumericFromMarket(market) {
-  const directKeys = [
-    "priceToBeat",
-    "price_to_beat",
-    "strikePrice",
-    "strike_price",
-    "strike",
-    "threshold",
-    "thresholdPrice",
-    "threshold_price",
-    "targetPrice",
-    "target_price",
-    "referencePrice",
-    "reference_price"
-  ];
-
-  for (const k of directKeys) {
-    const v = market?.[k];
-    const n = typeof v === "string" ? Number(v) : typeof v === "number" ? v : NaN;
-    if (Number.isFinite(n)) return n;
-  }
-
-  const seen = new Set();
-  const stack = [{ obj: market, depth: 0 }];
-
-  while (stack.length) {
-    const { obj, depth } = stack.pop();
-    if (!obj || typeof obj !== "object") continue;
-    if (seen.has(obj) || depth > 6) continue;
-    seen.add(obj);
-
-    const entries = Array.isArray(obj) ? obj.entries() : Object.entries(obj);
-    for (const [key, value] of entries) {
-      const k = String(key).toLowerCase();
-      if (value && typeof value === "object") {
-        stack.push({ obj: value, depth: depth + 1 });
-        continue;
-      }
-
-      if (!/(price|strike|threshold|target|beat)/i.test(k)) continue;
-
-      const n = typeof value === "string" ? Number(value) : typeof value === "number" ? value : NaN;
-      if (!Number.isFinite(n)) continue;
-
-      // guardrail: BTC-ish range
-      if (n > 1000 && n < 2_000_000) return n;
-    }
-  }
-
-  return null;
-}
-
-function strikePriceFromMarket(market) {
-  return extractNumericFromMarket(market) ?? parsePriceToBeatFromText(market);
-}
+// For BTC 15m Up/Down markets there is generally no static strike in Gamma.
+// Price-to-beat is derived from the Polymarket live Chainlink WS price at market start (handled client-side in the web UI).
 
 async function fetchPolymarketSnapshot(nowMs = Date.now()) {
   const market = await resolveCurrentBtc15mMarket(nowMs);
@@ -237,7 +174,8 @@ async function fetchPolymarketSnapshot(nowMs = Date.now()) {
     ok: true,
     market,
     marketSlug: String(market?.slug ?? ""),
-    strikePrice: strikePriceFromMarket(market),
+    marketStartTime: market?.eventStartTime ?? market?.startTime ?? market?.startDate ?? null,
+    marketEndTime: market?.endDate ?? null,
     prices,
     liquidity,
     spread,
@@ -248,9 +186,9 @@ async function fetchPolymarketSnapshot(nowMs = Date.now()) {
 
 /**
  * Stateless compute function.
- * Pass `state` to support CLI-like per-market latching behavior (priceToBeat).
+ * Note: price-to-beat latching is handled client-side (Polymarket WS) by design.
  */
-export async function computeSnapshot({ state } = {}) {
+export async function computeSnapshot() {
   applyGlobalProxyFromEnv();
 
   const timing = getCandleWindowTiming(CONFIG.candleWindowMinutes);
@@ -349,23 +287,7 @@ export async function computeSnapshot({ state } = {}) {
 
   const vwapSlopeLabel = vwapSlope === null ? "-" : vwapSlope > 0 ? "UP" : vwapSlope < 0 ? "DOWN" : "FLAT";
 
-  // CLI-like per-market latching for priceToBeat
-  // If state passed in, we store { marketSlug, value, setAtMs }
   const currentPrice = safeNum(chainlink?.price);
-  const marketSlug = poly.ok ? String(poly.marketSlug ?? "") : "";
-
-  if (state) {
-    if (state.marketSlug !== marketSlug) {
-      state.marketSlug = marketSlug;
-      state.value = null;
-      state.setAtMs = null;
-    }
-
-    if (state.marketSlug && state.value === null && currentPrice !== null) {
-      state.value = currentPrice;
-      state.setAtMs = nowMs;
-    }
-  }
 
   return {
     meta: {
@@ -404,7 +326,8 @@ export async function computeSnapshot({ state } = {}) {
     polymarket: {
       ok: poly.ok,
       marketSlug: poly.ok ? poly.marketSlug : null,
-      strikePrice: poly.ok ? poly.strikePrice : null,
+      marketStartTime: poly.ok ? poly.marketStartTime : null,
+      marketEndTime: poly.ok ? poly.marketEndTime : null,
       prices: { up: marketUp, down: marketDown },
       liquidity: poly.ok ? poly.liquidity : null,
       spread: poly.ok ? poly.spread : null
@@ -417,6 +340,7 @@ export async function computeSnapshot({ state } = {}) {
         ? ((safeNum(lastPrice) - currentPrice) / currentPrice) * 100
         : null
     },
-    priceToBeat: state ? { value: state.value, setAtMs: state.setAtMs, marketSlug: state.marketSlug } : null
+    // priceToBeat is computed client-side from the Polymarket WS stream
+    priceToBeat: null
   };
 }
