@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { connectPolymarketChainlinkWs } from "./_ws/polymarketPrice";
+import { connectClobMarketWs } from "./_ws/clobMarket";
 
 const TAB_ORDER = [
   { asset: "btc", label: "BTC" },
@@ -90,6 +91,9 @@ export default function Page() {
   const [ptbByAsset, setPtbByAsset] = useState({});
 
   const wsRef = useRef(null);
+  const clobRef = useRef(null);
+
+  const [clobByAsset, setClobByAsset] = useState({});
 
   const activeSnap = snapByAsset[activeAsset] ?? null;
   const activeErr = errByAsset[activeAsset] ?? null;
@@ -97,6 +101,7 @@ export default function Page() {
 
   const activeWs = wsByAsset[activeAsset] ?? { price: null, updatedAtMs: null, status: "-" };
   const activePtb = ptbByAsset[activeAsset] ?? { value: null, setAtMs: null, marketSlug: null };
+  const activeBbo = clobByAsset[activeAsset] ?? { up: null, down: null };
 
   // SSE: only keep one EventSource alive for the active tab.
   useAssetStream({
@@ -113,7 +118,7 @@ export default function Page() {
     }
   });
 
-  // Client WS: connect only for active tab.
+  // Client WS (Polymarket RTDS): connect only for active tab (CURRENT PRICE)
   useEffect(() => {
     wsRef.current?.close?.();
 
@@ -141,6 +146,57 @@ export default function Page() {
     wsRef.current = c;
     return () => c?.close?.();
   }, [activeAsset]);
+
+  // Client WS (CLOB market channel): best bid/ask for UP + DOWN tokens.
+  useEffect(() => {
+    const upTokenId = activeSnap?.polymarket?.tokens?.upTokenId ?? null;
+    const downTokenId = activeSnap?.polymarket?.tokens?.downTokenId ?? null;
+
+    // reset displayed bbo when market changes
+    const marketSlug = activeSnap?.polymarket?.marketSlug ?? null;
+    setClobByAsset((prev) => ({
+      ...prev,
+      [activeAsset]: {
+        ...(prev[activeAsset] ?? {}),
+        marketSlug,
+        up: (prev[activeAsset]?.marketSlug === marketSlug ? prev[activeAsset]?.up : null) ?? null,
+        down: (prev[activeAsset]?.marketSlug === marketSlug ? prev[activeAsset]?.down : null) ?? null
+      }
+    }));
+
+    // no tokens yet
+    const ids = [upTokenId, downTokenId].filter(Boolean);
+    if (!ids.length) {
+      clobRef.current?.close?.();
+      clobRef.current = null;
+      return;
+    }
+
+    clobRef.current?.close?.();
+
+    const c = connectClobMarketWs({
+      assetIds: ids,
+      onBestBidAsk: ({ assetId, bestBid, bestAsk }) => {
+        setClobByAsset((prev) => {
+          const cur = prev[activeAsset] ?? { marketSlug };
+          const next = { ...cur };
+
+          if (assetId === String(upTokenId)) {
+            next.up = { bid: bestBid, ask: bestAsk };
+          }
+          if (assetId === String(downTokenId)) {
+            next.down = { bid: bestBid, ask: bestAsk };
+          }
+
+          return { ...prev, [activeAsset]: next };
+        });
+      }
+    });
+
+    clobRef.current = c;
+    return () => c?.close?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeAsset, activeSnap?.polymarket?.marketSlug, activeSnap?.polymarket?.tokens?.upTokenId, activeSnap?.polymarket?.tokens?.downTokenId]);
 
   // Latch price-to-beat per asset: first WS tick at/after marketStartTime, resets on rollover.
   useEffect(() => {
@@ -308,8 +364,24 @@ export default function Page() {
             </div>
           </div>
           <div className="cardBody">
-            <div className="kv"><div className="k">Polymarket UP</div><div className="v mono" style={{ color: "var(--green)" }}>{activeSnap?.polymarket?.prices?.up !== null && activeSnap?.polymarket?.prices?.up !== undefined ? `${fmtNum(activeSnap.polymarket.prices.up, 2)}¢` : "-"}</div></div>
-            <div className="kv"><div className="k">Polymarket DOWN</div><div className="v mono" style={{ color: "var(--red)" }}>{activeSnap?.polymarket?.prices?.down !== null && activeSnap?.polymarket?.prices?.down !== undefined ? `${fmtNum(activeSnap.polymarket.prices.down, 2)}¢` : "-"}</div></div>
+            <div className="kv">
+              <div className="k">Polymarket UP</div>
+              <div className="v mono" style={{ display: "flex", gap: 12, justifyContent: "flex-end" }}>
+                <span style={{ color: "var(--muted)" }}>bid</span>
+                <span style={{ color: "var(--green)", minWidth: 62, textAlign: "right" }}>{activeBbo?.up?.bid !== null && activeBbo?.up?.bid !== undefined ? `${fmtNum(activeBbo.up.bid, 2)}¢` : "-"}</span>
+                <span style={{ color: "var(--muted)", marginLeft: 10 }}>ask</span>
+                <span style={{ color: "var(--green)", minWidth: 62, textAlign: "right" }}>{activeBbo?.up?.ask !== null && activeBbo?.up?.ask !== undefined ? `${fmtNum(activeBbo.up.ask, 2)}¢` : "-"}</span>
+              </div>
+            </div>
+            <div className="kv">
+              <div className="k">Polymarket DOWN</div>
+              <div className="v mono" style={{ display: "flex", gap: 12, justifyContent: "flex-end" }}>
+                <span style={{ color: "var(--muted)" }}>bid</span>
+                <span style={{ color: "var(--red)", minWidth: 62, textAlign: "right" }}>{activeBbo?.down?.bid !== null && activeBbo?.down?.bid !== undefined ? `${fmtNum(activeBbo.down.bid, 2)}¢` : "-"}</span>
+                <span style={{ color: "var(--muted)", marginLeft: 10 }}>ask</span>
+                <span style={{ color: "var(--red)", minWidth: 62, textAlign: "right" }}>{activeBbo?.down?.ask !== null && activeBbo?.down?.ask !== undefined ? `${fmtNum(activeBbo.down.ask, 2)}¢` : "-"}</span>
+              </div>
+            </div>
             <div className="kv"><div className="k">Liquidity</div><div className="v mono">{activeSnap?.polymarket?.liquidity !== null && activeSnap?.polymarket?.liquidity !== undefined ? fmtNum(activeSnap.polymarket.liquidity, 0) : "-"}</div></div>
             <div className="kv"><div className="k">Spread (worst)</div><div className="v mono">{activeSnap?.polymarket?.spread !== null && activeSnap?.polymarket?.spread !== undefined ? fmtNum(activeSnap.polymarket.spread, 4) : "-"}</div></div>
 
