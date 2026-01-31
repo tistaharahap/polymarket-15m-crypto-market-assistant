@@ -1,5 +1,26 @@
 # Polymarket BTC 15m Assistant
 
+## Web UI (Next.js 15)
+
+This repo now includes a **Next.js 15** frontend that renders the same core data as the CLI.
+
+- Start the web UI:
+  ```bash
+  npm run web
+  ```
+  Then open <http://localhost:3000>.
+
+- The browser **never calls external sources directly**. It only calls Next.js route handlers (e.g. `/api/snapshot`), and **all external HTTP requests happen server-side**.
+
+## CLI
+
+The original CLI remains available:
+```bash
+npm start
+```
+
+---
+
 A real-time console trading assistant for Polymarket **"Bitcoin Up or Down" 15-minute** markets.
 
 It combines:

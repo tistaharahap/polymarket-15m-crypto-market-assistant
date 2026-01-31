@@ -4,11 +4,17 @@
   "type": "module",
   "private": true,
   "scripts": {
-    "start": "node src/index.js"
+    "start": "node src/index.js",
+    "web": "next dev",
+    "web:build": "next build",
+    "web:start": "next start"
   },
   "dependencies": {
     "ethers": "^6.11.1",
     "https-proxy-agent": "^7.0.6",
+    "next": "15.5.7",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
     "socks-proxy-agent": "^8.0.5",
     "undici": "^6.21.3",
     "ws": "^8.18.0"
