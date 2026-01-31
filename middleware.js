@@ -47,6 +47,7 @@ export function middleware(req) {
 
 export const config = {
   matcher: [
-    "/((?!_next/static|_next/image|favicon.ico).*)"
+    // Exempt the SSE endpoint from Basic Auth to avoid EventSource auth/header limitations.
+    "/((?!_next/static|_next/image|favicon.ico|api/stream).*)"
   ]
 };

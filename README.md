@@ -21,11 +21,13 @@ npm run web
 Open: <http://localhost:3000>
 
 ### Basic HTTP Auth (optional)
-If you set these env vars, the entire web UI + API will be protected with Basic Auth:
+If you set these env vars, the web UI is protected with Basic Auth:
 - `BASIC_AUTH_USER`
 - `BASIC_AUTH_PASS`
 
 If either one is missing, auth is disabled.
+
+Note: `/api/stream` (SSE) is intentionally **exempt** from Basic Auth, because browser `EventSource` cannot reliably attach `Authorization` headers.
 
 Example:
 ```bash
