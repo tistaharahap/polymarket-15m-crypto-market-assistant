@@ -14,41 +14,47 @@ function sseEncode({ event, data, id } = {}) {
 }
 
 export async function GET(req) {
-
   const encoder = new TextEncoder();
   let timer = null;
   let counter = 0;
+  let closed = false;
 
   const stream = new ReadableStream({
     start(controller) {
       const url = new URL(req.url);
       const asset = url.searchParams.get("asset") ?? "btc";
 
+      const safeEnqueue = (chunk) => {
+        if (closed) return false;
+        try {
+          controller.enqueue(chunk);
+          return true;
+        } catch {
+          return false;
+        }
+      };
+
       const send = async () => {
+        if (closed) return;
         counter += 1;
+
         try {
           const snap = await computeSnapshot({ asset });
-          controller.enqueue(
-            encoder.encode(
-              sseEncode({ event: "snapshot", id: counter, data: JSON.stringify(snap) })
-            )
-          );
+          safeEnqueue(encoder.encode(sseEncode({ event: "snapshot", id: counter, data: JSON.stringify(snap) })));
         } catch (e) {
-          controller.enqueue(
-            encoder.encode(
-              sseEncode({ event: "error", id: counter, data: JSON.stringify({ error: e?.message ?? String(e) }) })
-            )
-          );
+          // If the client disconnected, the controller is closed; don't try to write.
+          safeEnqueue(encoder.encode(sseEncode({ event: "error", id: counter, data: JSON.stringify({ error: e?.message ?? String(e) }) })));
         }
       };
 
       // initial hello + first snapshot immediately
-      controller.enqueue(encoder.encode(": connected\n\n"));
+      safeEnqueue(encoder.encode(": connected\n\n"));
       send();
 
       timer = setInterval(send, 1000);
     },
     cancel() {
+      closed = true;
       if (timer) clearInterval(timer);
     }
   });
