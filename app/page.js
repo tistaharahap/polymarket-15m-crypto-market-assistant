@@ -76,14 +76,15 @@ export default function Page() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tick]);
 
+  const pUp = data?.predict?.pUp ?? null;
+  const pDown = data?.predict?.pDown ?? null;
+
   const mood = useMemo(() => {
-    const pUp = data?.predict?.pUp;
-    const pDown = data?.predict?.pDown;
     if (pUp === null || pDown === null) return { label: "NO SIGNAL", dot: "amber" };
     if (pUp > pDown) return { label: `LEAN UP (${Math.round(pUp * 100)}%)`, dot: "green" };
     if (pDown > pUp) return { label: `LEAN DOWN (${Math.round(pDown * 100)}%)`, dot: "red" };
     return { label: "NEUTRAL", dot: "amber" };
-  }, [data]);
+  }, [pUp, pDown]);
 
   const action = data?.recommendation?.action || "-";
   const actionDot = action === "ENTER" ? (data?.recommendation?.side === "UP" ? "green" : "red") : "amber";
@@ -124,11 +125,11 @@ export default function Page() {
                 <div className="cardBody">
                   <div className="bigRow">
                     <div className="bigLabel">UP</div>
-                    <div className="bigValue" style={{ color: "var(--green)" }}>{data?.predict?.pUp !== null ? `${Math.round(data.predict.pUp * 100)}%` : "-"}</div>
+                    <div className="bigValue" style={{ color: "var(--green)" }}>{pUp === null ? "-" : `${Math.round(pUp * 100)}%`}</div>
                   </div>
                   <div className="bigRow">
                     <div className="bigLabel">DOWN</div>
-                    <div className="bigValue" style={{ color: "var(--red)" }}>{data?.predict?.pDown !== null ? `${Math.round(data.predict.pDown * 100)}%` : "-"}</div>
+                    <div className="bigValue" style={{ color: "var(--red)" }}>{pDown === null ? "-" : `${Math.round(pDown * 100)}%`}</div>
                   </div>
                 </div>
               </div>
