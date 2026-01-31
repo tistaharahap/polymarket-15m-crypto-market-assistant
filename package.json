@@ -10,6 +10,7 @@
     "web:start": "next start"
   },
   "dependencies": {
+    "@polymarket/clob-client": "^5.2.0",
     "ethers": "^6.11.1",
     "https-proxy-agent": "^7.0.6",
     "next": "15.5.7",

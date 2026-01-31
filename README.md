@@ -1,23 +1,51 @@
-# Polymarket BTC 15m Assistant
+# Crypto 15m Assistant (Polymarket)
+
+A web-based assistant for **Polymarket 15-minute Up/Down crypto markets**, powered by:
+- Binance spot klines for indicators (VWAP/RSI/MACD/Heiken Ashi)
+- Polymarket Gamma API (market discovery + UP/DOWN prices + liquidity)
+- A simple probability/edge model that produces:
+  - **Lean UP/DOWN (%)**
+  - **Enter Now (UP/DOWN)** when edge + probability thresholds are met
+
+Currently supported tabs (in UI order): **BTC, ETH, XRP, SOL**.
 
 ## Web UI (Next.js 15)
 
-This repo now includes a **Next.js 15** frontend that renders the same core data as the CLI.
+### Run
+```bash
+npm install
+npm run web
+```
+Open: <http://localhost:3000>
 
-- Start the web UI:
-  ```bash
-  npm run web
-  ```
-  Then open <http://localhost:3000>.
-
-- The browser **never calls external sources directly**. It only calls Next.js route handlers (e.g. `/api/snapshot`), and **all external HTTP requests happen server-side**.
+### How data flows
+- **HTTP requests to third-party sources are proxied server-side** via Next.js route handlers.
+  - `/api/snapshot?asset=...`
+  - `/api/stream?asset=...` (SSE)
+- **Current Price** is fetched **client-side** from Polymarket’s live-data WebSocket (`wss://ws-live-data.polymarket.com`) per Tista’s explicit decision.
+- **Price to Beat** is latched client-side: first WS tick at/after the market start time.
 
 ## CLI
-
 The original CLI remains available:
 ```bash
 npm start
 ```
+
+## Trading functions (copied from `multipoly`)
+This repo includes trading utilities (ported from the `multipoly` repo) under:
+- `src/trading/`
+
+These functions are **NOT used automatically** by the web UI.
+They are gated behind:
+- `TRADING_ENABLED=true`
+
+### Environment variables
+- `TRADING_ENABLED` (default: false)
+- `POLY_PRIVATE_KEY` (required if trading enabled)
+- `POLY_FUNDER_ADDRESS` (optional)
+- `POLY_CLOB_API` (default: https://clob.polymarket.com)
+- `POLY_SIGNATURE_TYPE` (optional)
+- `POLY_USE_SERVER_TIME` (optional)
 
 ---
 
