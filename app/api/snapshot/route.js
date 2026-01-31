@@ -2,9 +2,11 @@ import { computeSnapshot } from "../../../src/web/snapshot.js";
 
 export const dynamic = "force-dynamic";
 
-export async function GET() {
+export async function GET(req) {
   try {
-    const out = await computeSnapshot();
+    const url = new URL(req.url);
+    const asset = url.searchParams.get("asset") ?? "btc";
+    const out = await computeSnapshot({ asset });
     return Response.json(out, {
       headers: {
         "Cache-Control": "no-store, max-age=0"

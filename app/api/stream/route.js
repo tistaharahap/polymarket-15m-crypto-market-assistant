@@ -13,7 +13,7 @@ function sseEncode({ event, data, id } = {}) {
   return out;
 }
 
-export async function GET() {
+export async function GET(req) {
 
   const encoder = new TextEncoder();
   let timer = null;
@@ -21,10 +21,13 @@ export async function GET() {
 
   const stream = new ReadableStream({
     start(controller) {
+      const url = new URL(req.url);
+      const asset = url.searchParams.get("asset") ?? "btc";
+
       const send = async () => {
         counter += 1;
         try {
-          const snap = await computeSnapshot();
+          const snap = await computeSnapshot({ asset });
           controller.enqueue(
             encoder.encode(
               sseEncode({ event: "snapshot", id: counter, data: JSON.stringify(snap) })

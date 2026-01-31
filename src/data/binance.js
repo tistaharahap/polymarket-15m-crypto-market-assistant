@@ -5,9 +5,9 @@ function toNumber(x) {
   return Number.isFinite(n) ? n : null;
 }
 
-export async function fetchKlines({ interval, limit }) {
+export async function fetchKlines({ interval, limit, symbol = CONFIG.symbol }) {
   const url = new URL("/api/v3/klines", CONFIG.binanceBaseUrl);
-  url.searchParams.set("symbol", CONFIG.symbol);
+  url.searchParams.set("symbol", symbol);
   url.searchParams.set("interval", interval);
   url.searchParams.set("limit", String(limit));
 
@@ -28,9 +28,9 @@ export async function fetchKlines({ interval, limit }) {
   }));
 }
 
-export async function fetchLastPrice() {
+export async function fetchLastPrice({ symbol = CONFIG.symbol } = {}) {
   const url = new URL("/api/v3/ticker/price", CONFIG.binanceBaseUrl);
-  url.searchParams.set("symbol", CONFIG.symbol);
+  url.searchParams.set("symbol", symbol);
   const res = await fetch(url);
   if (!res.ok) {
     throw new Error(`Binance last price error: ${res.status} ${await res.text()}`);

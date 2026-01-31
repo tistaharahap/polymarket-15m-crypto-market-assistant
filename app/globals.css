@@ -75,6 +75,32 @@ a{color:inherit}
   backdrop-filter: blur(10px);
 }
 
+.tabs{
+  display:flex;
+  gap:10px;
+  flex-wrap:wrap;
+  align-items:center;
+}
+.tab{
+  cursor:pointer;
+  user-select:none;
+  border-radius: 999px;
+  border: 1px solid rgba(27,42,68,.9);
+  background: rgba(10,16,28,.35);
+  padding: 10px 12px;
+  font-size: 12px;
+  letter-spacing: .14em;
+  text-transform: uppercase;
+  color: rgba(165,180,208,.9);
+}
+.tab:hover{border-color: rgba(89,215,255,.7)}
+.tabActive{
+  background: rgba(10,16,28,.7);
+  color: var(--text);
+  border-color: rgba(89,215,255,.55);
+  box-shadow: 0 0 0 6px rgba(89,215,255,.10);
+}
+
 .grid{
   display:grid;
   grid-template-columns: 1.15fr .85fr;

@@ -1,10 +1,9 @@
 import { CONFIG } from "../config.js";
 import { fetchKlines, fetchLastPrice } from "../data/binance.js";
-import { fetchChainlinkBtcUsd } from "../data/chainlink.js";
+// Chainlink HTTP fallback removed in multi-asset mode; current price is Polymarket WS (client).
 import {
   fetchMarketBySlug,
-  fetchLiveEventsBySeriesId,
-  flattenEventMarkets,
+  fetchActiveMarkets,
   pickLatestLiveMarket,
   fetchClobPrice,
   fetchOrderBook,
@@ -65,37 +64,77 @@ function countVwapCrosses(closes, vwapSeries, lookback) {
   return crosses;
 }
 
-// small shared cache across calls
-const marketCache = {
-  market: null,
-  fetchedAtMs: 0
-};
+// small per-asset cache across calls (avoid hammering Gamma)
+const marketCacheByAsset = new Map();
 
-async function resolveCurrentBtc15mMarket(nowMs = Date.now()) {
-  if (CONFIG.polymarket.marketSlug) {
-    return await fetchMarketBySlug(CONFIG.polymarket.marketSlug);
+async function fetchActiveMarketsBySlugPrefix({ slugPrefix, maxPages = 25 }) {
+  const out = [];
+  for (let page = 0; page < maxPages; page += 1) {
+    const offset = page * 200;
+    const batch = await fetchActiveMarkets({ limit: 200, offset });
+    if (!batch.length) break;
+
+    for (const m of batch) {
+      const slug = String(m?.slug ?? "").toLowerCase();
+      if (slugPrefix && slug.startsWith(slugPrefix)) out.push(m);
+    }
+
+    // If we already have some matches, don't keep hammering.
+    if (out.length >= 20) break;
+  }
+  return out;
+}
+
+function current15mStartTs(nowMs = Date.now()) {
+  const s = Math.floor(nowMs / 1000);
+  return Math.floor(s / 900) * 900;
+}
+
+async function resolveCurrentUpdown15mMarket({ asset, nowMs = Date.now() }) {
+  const prefix = slugPrefixForAsset(asset);
+
+  const cached = marketCacheByAsset.get(asset);
+  if (cached?.market && nowMs - cached.fetchedAtMs < 2_000) {
+    return cached.market;
   }
 
-  if (!CONFIG.polymarket.autoSelectLatest) return null;
-
-  if (marketCache.market && nowMs - marketCache.fetchedAtMs < 2_000) {
-    return marketCache.market;
+  // Fast path: interpolate the expected slug for the current 15m window.
+  const ts = current15mStartTs(nowMs);
+  const slug = `${asset}-updown-15m-${ts}`;
+  const direct = await fetchMarketBySlug(slug);
+  if (direct) {
+    marketCacheByAsset.set(asset, { market: direct, fetchedAtMs: nowMs });
+    return direct;
   }
 
-  const events = await fetchLiveEventsBySeriesId({ seriesId: CONFIG.polymarket.seriesId, limit: 25 });
-  const markets = flattenEventMarkets(events);
+  // Fallback: scan active markets and pick the live one.
+  const markets = await fetchActiveMarketsBySlugPrefix({ slugPrefix: prefix, maxPages: 25 });
   const picked = pickLatestLiveMarket(markets);
 
-  marketCache.market = picked;
-  marketCache.fetchedAtMs = nowMs;
+  marketCacheByAsset.set(asset, { market: picked, fetchedAtMs: nowMs });
   return picked;
 }
 
-// For BTC 15m Up/Down markets there is generally no static strike in Gamma.
+// For 15m Up/Down markets there is generally no static strike in Gamma.
 // Price-to-beat is derived from the Polymarket live Chainlink WS price at market start (handled client-side in the web UI).
 
-async function fetchPolymarketSnapshot(nowMs = Date.now()) {
-  const market = await resolveCurrentBtc15mMarket(nowMs);
+const ASSETS = ["btc", "eth", "xrp", "sol"];
+
+export function normalizeAsset(x) {
+  const a = String(x ?? "").trim().toLowerCase();
+  return ASSETS.includes(a) ? a : "btc";
+}
+
+export function binanceSymbolForAsset(asset) {
+  return `${String(asset).toUpperCase()}USDT`;
+}
+
+export function slugPrefixForAsset(asset) {
+  return `${String(asset).toLowerCase()}-updown-15m-`;
+}
+
+async function fetchPolymarketSnapshot({ asset, nowMs = Date.now() }) {
+  const market = await resolveCurrentUpdown15mMarket({ asset, nowMs });
   if (!market) return { ok: false, reason: "market_not_found" };
 
   const outcomes = Array.isArray(market.outcomes)
@@ -188,18 +227,20 @@ async function fetchPolymarketSnapshot(nowMs = Date.now()) {
  * Stateless compute function.
  * Note: price-to-beat latching is handled client-side (Polymarket WS) by design.
  */
-export async function computeSnapshot() {
+export async function computeSnapshot({ asset } = {}) {
   applyGlobalProxyFromEnv();
+
+  const a = normalizeAsset(asset);
+  const symbol = binanceSymbolForAsset(a);
 
   const timing = getCandleWindowTiming(CONFIG.candleWindowMinutes);
   const now = new Date();
   const nowMs = now.getTime();
 
-  const [klines1m, lastPrice, chainlink, poly] = await Promise.all([
-    fetchKlines({ interval: "1m", limit: 240 }),
-    fetchLastPrice(),
-    fetchChainlinkBtcUsd(),
-    fetchPolymarketSnapshot(nowMs)
+  const [klines1m, lastPrice, poly] = await Promise.all([
+    fetchKlines({ interval: "1m", limit: 240, symbol }),
+    fetchLastPrice({ symbol }),
+    fetchPolymarketSnapshot({ asset: a, nowMs })
   ]);
 
   const settlementMs = poly.ok && poly.market?.endDate ? new Date(poly.market.endDate).getTime() : null;
@@ -287,7 +328,7 @@ export async function computeSnapshot() {
 
   const vwapSlopeLabel = vwapSlope === null ? "-" : vwapSlope > 0 ? "UP" : vwapSlope < 0 ? "DOWN" : "FLAT";
 
-  const currentPrice = safeNum(chainlink?.price);
+  // Current price comes from Polymarket WS on the client (per Tista decision).
 
   return {
     meta: {
@@ -333,12 +374,7 @@ export async function computeSnapshot() {
       spread: poly.ok ? poly.spread : null
     },
     prices: {
-      chainlink: currentPrice,
-      binance: safeNum(lastPrice),
-      diffUsd: (safeNum(lastPrice) !== null && currentPrice !== null) ? safeNum(lastPrice) - currentPrice : null,
-      diffPct: (safeNum(lastPrice) !== null && currentPrice !== null && currentPrice !== 0)
-        ? ((safeNum(lastPrice) - currentPrice) / currentPrice) * 100
-        : null
+      binance: safeNum(lastPrice)
     },
     // priceToBeat is computed client-side from the Polymarket WS stream
     priceToBeat: null

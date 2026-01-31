@@ -24,7 +24,8 @@ function toFiniteNumber(x) {
 export function connectPolymarketChainlinkWs({
   wsUrl = "wss://ws-live-data.polymarket.com",
   symbolIncludes = "btc",
-  onTick
+  onTick,
+  onStatus
 } = {}) {
   let ws = null;
   let closed = false;
@@ -51,6 +52,7 @@ export function connectPolymarketChainlinkWs({
     ws.addEventListener("open", () => {
       reconnectMs = 500;
       try {
+        if (typeof onStatus === "function") onStatus({ status: "open" });
         ws.send(
           JSON.stringify({
             action: "subscribe",
@@ -85,8 +87,14 @@ export function connectPolymarketChainlinkWs({
       if (typeof onTick === "function") onTick({ price, updatedAtMs });
     });
 
-    ws.addEventListener("close", scheduleReconnect);
-    ws.addEventListener("error", scheduleReconnect);
+    ws.addEventListener("close", () => {
+      if (typeof onStatus === "function") onStatus({ status: "closed" });
+      scheduleReconnect();
+    });
+    ws.addEventListener("error", () => {
+      if (typeof onStatus === "function") onStatus({ status: "error" });
+      scheduleReconnect();
+    });
   };
 
   connect();
