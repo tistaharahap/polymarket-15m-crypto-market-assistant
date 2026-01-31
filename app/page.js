@@ -167,21 +167,21 @@ export default function Page() {
             </div>
           </div>
           <div className="cardBody">
-            <div className="kv"><div className="k">Polymarket UP</div><div className="v mono" style={{ color: "var(--green)" }}>{data?.polymarket?.prices?.up !== null ? `${fmtNum(data.polymarket.prices.up, 2)}¢` : "-"}</div></div>
-            <div className="kv"><div className="k">Polymarket DOWN</div><div className="v mono" style={{ color: "var(--red)" }}>{data?.polymarket?.prices?.down !== null ? `${fmtNum(data.polymarket.prices.down, 2)}¢` : "-"}</div></div>
-            <div className="kv"><div className="k">Liquidity</div><div className="v mono">{data?.polymarket?.liquidity !== null ? fmtNum(data.polymarket.liquidity, 0) : "-"}</div></div>
-            <div className="kv"><div className="k">Spread (worst)</div><div className="v mono">{data?.polymarket?.spread !== null ? fmtNum(data.polymarket.spread, 4) : "-"}</div></div>
+            <div className="kv"><div className="k">Polymarket UP</div><div className="v mono" style={{ color: "var(--green)" }}>{data?.polymarket?.prices?.up !== null && data?.polymarket?.prices?.up !== undefined ? `${fmtNum(data.polymarket.prices.up, 2)}¢` : "-"}</div></div>
+            <div className="kv"><div className="k">Polymarket DOWN</div><div className="v mono" style={{ color: "var(--red)" }}>{data?.polymarket?.prices?.down !== null && data?.polymarket?.prices?.down !== undefined ? `${fmtNum(data.polymarket.prices.down, 2)}¢` : "-"}</div></div>
+            <div className="kv"><div className="k">Liquidity</div><div className="v mono">{data?.polymarket?.liquidity !== null && data?.polymarket?.liquidity !== undefined ? fmtNum(data.polymarket.liquidity, 0) : "-"}</div></div>
+            <div className="kv"><div className="k">Spread (worst)</div><div className="v mono">{data?.polymarket?.spread !== null && data?.polymarket?.spread !== undefined ? fmtNum(data.polymarket.spread, 4) : "-"}</div></div>
 
             <div style={{ height: 12 }} />
 
             <div className="kv"><div className="k">Chainlink BTC/USD</div><div className="v mono">{fmtUsd(data?.prices?.chainlink, 2)}</div></div>
             <div className="kv"><div className="k">Binance BTCUSDT</div><div className="v mono">{fmtUsd(data?.prices?.binance, 0)}</div></div>
-            <div className="kv"><div className="k">Diff</div><div className="v mono">{data?.prices?.diffUsd !== null ? `${data.prices.diffUsd > 0 ? "+" : "-"}${fmtUsd(Math.abs(data.prices.diffUsd), 2)} (${data.prices.diffPct > 0 ? "+" : "-"}${Math.abs(data.prices.diffPct).toFixed(2)}%)` : "-"}</div></div>
+            <div className="kv"><div className="k">Diff</div><div className="v mono">{data?.prices?.diffUsd !== null && data?.prices?.diffUsd !== undefined ? `${data.prices.diffUsd > 0 ? "+" : "-"}${fmtUsd(Math.abs(data.prices.diffUsd), 2)} (${(data?.prices?.diffPct ?? 0) > 0 ? "+" : "-"}${Math.abs(data?.prices?.diffPct ?? 0).toFixed(2)}%)` : "-"}</div></div>
 
             <div style={{ height: 12 }} />
 
-            <div className="kv"><div className="k">Model edge (UP)</div><div className="v mono">{data?.edge?.edgeUp !== null ? fmtPct(data.edge.edgeUp, 2) : "-"}</div></div>
-            <div className="kv"><div className="k">Model edge (DOWN)</div><div className="v mono">{data?.edge?.edgeDown !== null ? fmtPct(data.edge.edgeDown, 2) : "-"}</div></div>
+            <div className="kv"><div className="k">Model edge (UP)</div><div className="v mono">{data?.edge?.edgeUp !== null && data?.edge?.edgeUp !== undefined ? fmtPct(data.edge.edgeUp, 2) : "-"}</div></div>
+            <div className="kv"><div className="k">Model edge (DOWN)</div><div className="v mono">{data?.edge?.edgeDown !== null && data?.edge?.edgeDown !== undefined ? fmtPct(data.edge.edgeDown, 2) : "-"}</div></div>
           </div>
         </aside>
       </div>
