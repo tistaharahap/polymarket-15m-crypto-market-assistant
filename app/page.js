@@ -65,6 +65,7 @@ export default function Page() {
   const [metaByAsset, setMetaByAsset] = useState({});
   const [metaErrByAsset, setMetaErrByAsset] = useState({});
   const [metaLoadingByAsset, setMetaLoadingByAsset] = useState({ btc: true, eth: true, xrp: true, sol: true });
+  const lastMarketSlugRef = useRef({});
 
   // Polymarket RTDS price (oracle/current price) per active asset
   const [pmPrice, setPmPrice] = useState({ price: null, updatedAtMs: null, status: "-" });
@@ -95,22 +96,69 @@ export default function Page() {
 
   const bin = binanceByAsset[activeAsset] ?? { status: "-", candles: null, lastTrade: null };
 
-  // Fetch Polymarket market meta on tab open (and refresh periodically to catch rollovers)
+  // Fetch Polymarket market meta on tab open, then schedule a rollover fetch at the precise end time.
+  // No periodic polling: rollover is controlled by the client clock.
   useEffect(() => {
     let alive = true;
+    let rolloverTimer = null;
+    let retryTimer = null;
 
-    async function load() {
+    const clearTimers = () => {
+      if (rolloverTimer) clearTimeout(rolloverTimer);
+      if (retryTimer) clearTimeout(retryTimer);
+      rolloverTimer = null;
+      retryTimer = null;
+    };
+
+    const scheduleRollover = (endTime) => {
+      clearTimers();
+      if (!endTime) return;
+      const endMs = new Date(endTime).getTime();
+      if (!Number.isFinite(endMs)) return;
+
+      const now = Date.now();
+      const delay = Math.max(0, endMs - now);
+
+      rolloverTimer = setTimeout(() => {
+        // At boundary, fetch next market immediately.
+        load({ expectNewSlug: true });
+      }, delay);
+    };
+
+    async function load({ expectNewSlug = false, attempt = 0 } = {}) {
       setMetaLoadingByAsset((p) => ({ ...p, [activeAsset]: true }));
       setMetaErrByAsset((p) => ({ ...p, [activeAsset]: null }));
+
+      const prevSlug = lastMarketSlugRef.current?.[activeAsset] ?? null;
+
       try {
         const res = await fetch(`/api/snapshot?asset=${encodeURIComponent(activeAsset)}`, { cache: "no-store" });
         const j = await res.json();
         if (!res.ok) throw new Error(j?.error || `HTTP ${res.status}`);
         if (!alive) return;
+
         setMetaByAsset((p) => ({ ...p, [activeAsset]: j }));
+        lastMarketSlugRef.current = { ...(lastMarketSlugRef.current ?? {}), [activeAsset]: j?.polymarket?.marketSlug ?? null };
+
+        // schedule next rollover based on the market end time we just got
+        scheduleRollover(j?.polymarket?.marketEndTime ?? null);
+
+        // If we're expecting a new slug right after boundary, but Gamma hasn't surfaced it yet,
+        // retry quickly a few times (sub-second) to minimize rollover lag.
+        const newSlug = j?.polymarket?.marketSlug ?? null;
+        if (expectNewSlug && prevSlug && newSlug === prevSlug && attempt < 20) {
+          const backoff = Math.min(1000, 150 + attempt * 50);
+          retryTimer = setTimeout(() => load({ expectNewSlug: true, attempt: attempt + 1 }), backoff);
+        }
       } catch (e) {
         if (!alive) return;
         setMetaErrByAsset((p) => ({ ...p, [activeAsset]: e?.message ?? String(e) }));
+
+        // On error, retry quickly around rollover window.
+        if (expectNewSlug && attempt < 20) {
+          const backoff = Math.min(1000, 150 + attempt * 50);
+          retryTimer = setTimeout(() => load({ expectNewSlug: true, attempt: attempt + 1 }), backoff);
+        }
       } finally {
         if (!alive) return;
         setMetaLoadingByAsset((p) => ({ ...p, [activeAsset]: false }));
@@ -118,12 +166,13 @@ export default function Page() {
     }
 
     load();
-    const t = setInterval(load, 10_000);
 
     return () => {
       alive = false;
-      clearInterval(t);
+      clearTimers();
     };
+    // Intentionally NOT depending on metaByAsset to avoid rerender loops.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeAsset]);
 
   // Polymarket RTDS WS for CURRENT PRICE (active asset only)
