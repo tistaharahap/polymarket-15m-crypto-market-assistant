@@ -13,12 +13,24 @@ Supported tabs (UI order): **BTC, ETH, XRP, SOL**.
 
 ## Web UI (Next.js 15)
 
-### Run
+### Run (local dev)
 ```bash
 npm install
 npm run web
 ```
 Open: <http://localhost:3000>
+
+### Run (production / Coolify)
+Use build + start (do not run `next dev` in production).
+
+- Build command:
+  ```bash
+  npm run web:build
+  ```
+- Start command:
+  ```bash
+  npm run web:start
+  ```
 
 ### Basic HTTP Auth (optional)
 If you set these env vars, the web UI is protected with Basic Auth:

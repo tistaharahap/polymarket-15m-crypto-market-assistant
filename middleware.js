@@ -16,6 +16,15 @@ function unauthorized() {
   });
 }
 
+function safeAtob(b64) {
+  try {
+    // Edge runtime supports atob()
+    return atob(b64);
+  } catch {
+    return null;
+  }
+}
+
 export function middleware(req) {
   const user = process.env.BASIC_AUTH_USER;
   const pass = process.env.BASIC_AUTH_PASS;
@@ -27,12 +36,8 @@ export function middleware(req) {
   if (!auth.toLowerCase().startsWith("basic ")) return unauthorized();
 
   const b64 = auth.slice(6).trim();
-  let decoded = "";
-  try {
-    decoded = Buffer.from(b64, "base64").toString("utf8");
-  } catch {
-    return unauthorized();
-  }
+  const decoded = safeAtob(b64);
+  if (!decoded) return unauthorized();
 
   const idx = decoded.indexOf(":");
   if (idx < 0) return unauthorized();
