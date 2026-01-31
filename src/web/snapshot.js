@@ -369,6 +369,8 @@ export async function computeSnapshot({ asset } = {}) {
       marketSlug: poly.ok ? poly.marketSlug : null,
       marketStartTime: poly.ok ? poly.marketStartTime : null,
       marketEndTime: poly.ok ? poly.marketEndTime : null,
+      // Required client-side for CLOB WS orderbook subscriptions.
+      tokens: poly.ok ? poly.tokens : null,
       prices: { up: marketUp, down: marketDown },
       liquidity: poly.ok ? poly.liquidity : null,
       spread: poly.ok ? poly.spread : null
