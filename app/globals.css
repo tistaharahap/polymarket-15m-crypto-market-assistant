@@ -223,3 +223,133 @@ a{color:inherit}
   color: rgba(255,215,223,.95);
   font-size: 13px;
 }
+
+.chartShell{
+  position:relative;
+  display:flex;
+  flex-direction:column;
+  gap:12px;
+}
+
+.chartHeader{
+  display:flex;
+  align-items:flex-start;
+  justify-content:space-between;
+  gap:14px;
+  flex-wrap:wrap;
+}
+
+.chartTitle{
+  font-size: 12px;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+
+.chartMeta{
+  color: var(--muted);
+  font-size: 12px;
+  margin-top: 4px;
+}
+
+.chartMetaRow{
+  display:flex;
+  align-items:center;
+  gap:12px;
+  flex-wrap:wrap;
+}
+
+.chartAttribution{
+  color: var(--muted);
+  font-size: 11px;
+  text-decoration: none;
+  border-bottom: 1px dotted rgba(165,180,208,.5);
+}
+
+.chartAttribution:hover{
+  color: var(--text);
+  border-bottom-color: rgba(233,238,249,.7);
+}
+
+.chartLast{
+  color: var(--text);
+  font-size: 12px;
+}
+
+.chartCanvas{
+  height: 320px;
+  border: 1px solid rgba(27,42,68,.65);
+  border-radius: 12px;
+  background: rgba(7,8,11,.25);
+}
+
+.chartEmpty{
+  position:absolute;
+  inset: 52px 12px 12px 12px;
+  border-radius: 10px;
+  background: rgba(7,8,11,.45);
+  color: var(--muted);
+  font-size: 12px;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  pointer-events:none;
+  text-align:center;
+}
+
+.infoTableWrap{
+  margin-top: 12px;
+}
+
+.infoTable{
+  width: 100%;
+  border-collapse: collapse;
+  background: rgba(13,26,63,.45);
+  border: 1px solid rgba(28,48,109,.8);
+  border-radius: 12px;
+  overflow: hidden;
+  font-size: 12px;
+}
+
+.infoTable th,
+.infoTable td{
+  padding: 8px 10px;
+  border-bottom: 1px solid rgba(28,48,109,.6);
+  text-align: left;
+}
+
+.infoTable thead th{
+  color: #ffffff;
+  font-weight: 600;
+}
+
+.infoTable thead tr:first-child th{
+  background: rgba(13,26,63,.75);
+  text-transform: uppercase;
+  letter-spacing: .1em;
+  font-size: 11px;
+  text-align: center;
+}
+
+.infoTable thead tr:last-child th{
+  background: rgba(13,26,63,.55);
+  color: var(--muted);
+  font-weight: 500;
+  text-align: center;
+}
+
+.infoTable tbody tr:last-child td{
+  border-bottom: none;
+}
+
+.infoTable .demand{
+  color: #56a3a6;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+
+.infoTable .supply{
+  color: #db504a;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { createChart, ColorType, CandlestickSeries } from "lightweight-charts";
 import { connectPolymarketChainlinkWs } from "./_ws/polymarketPrice";
 import { connectClobMarketWs } from "./_ws/clobMarket";
 import { connectBinanceWs, normalizeBinanceSymbol, seedKlines } from "./_ws/binance";
@@ -58,6 +59,246 @@ function dotClass(kind) {
   return "dot";
 }
 
+const DELTA_PERIOD = 21;
+const DELTA_MODE = "EMA";
+
+function computeDeltaSeries(candles, period = DELTA_PERIOD, mode = DELTA_MODE) {
+  if (!Array.isArray(candles) || candles.length === 0) {
+    return { data: [], currentRatio: null, emaRatio: null };
+  }
+
+  const k = 2 / (period + 1);
+  let ema = null;
+  let currentRatio = null;
+  const data = [];
+
+  for (const c of candles) {
+    const time = Math.floor(Number(c.openTime) / 1000);
+    if (!Number.isFinite(time)) continue;
+
+    const o = Number(c.open);
+    const h = Number(c.high);
+    const l = Number(c.low);
+    const cl = Number(c.close);
+    const valid = [o, h, l, cl].every((v) => Number.isFinite(v));
+
+    if (!valid) {
+      data.push({ time });
+      continue;
+    }
+
+    const range = h - l;
+    let ratio = range > 0 ? (cl - l) / range : 0.5;
+    if (!Number.isFinite(ratio)) ratio = 0.5;
+    ratio = Math.min(1, Math.max(0, Math.abs(ratio)));
+    currentRatio = ratio;
+
+    ema = ema === null ? ratio : ratio * k + ema * (1 - k);
+    const cumulative = mode === "EMA" ? ema : ratio;
+
+    const isUp = cl >= o;
+    const bodyOpen = isUp ? o : cl + (o - cl) * cumulative;
+    const bodyClose = isUp ? o + (cl - o) * cumulative : o;
+    const color = isUp ? "rgba(8,153,129,0.65)" : "rgba(242,54,69,0.65)";
+
+    data.push({
+      time,
+      openTime: c.openTime,
+      open: bodyOpen,
+      high: h,
+      low: l,
+      close: bodyClose,
+      color,
+      wickColor: "rgba(0,0,0,0)",
+      borderColor: "rgba(0,0,0,0)"
+    });
+  }
+
+  return { data, currentRatio, emaRatio: ema };
+}
+
+function CandleChart({ candles, seriesData, asset, intervalLabel = "1m" }) {
+  const containerRef = useRef(null);
+  const chartRef = useRef(null);
+  const baseSeriesRef = useRef(null);
+  const overlaySeriesRef = useRef(null);
+  const lastLenRef = useRef(0);
+
+  const priceDigits = asset === "xrp" ? 4 : 2;
+  const lastCandle = Array.isArray(candles) && candles.length ? candles[candles.length - 1] : null;
+  const symbol = normalizeBinanceSymbol(asset);
+  const baseData = useMemo(() => {
+    if (!Array.isArray(candles) || candles.length === 0) return [];
+    return candles
+      .slice(-240)
+      .filter((c) => [c.open, c.high, c.low, c.close].every((v) => typeof v === "number" && Number.isFinite(v)))
+      .map((c) => ({
+        time: Math.floor(c.openTime / 1000),
+        open: c.open,
+        high: c.high,
+        low: c.low,
+        close: c.close
+      }));
+  }, [candles]);
+  const overlayData = Array.isArray(seriesData) ? seriesData : [];
+
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+
+    const styles = getComputedStyle(document.documentElement);
+    const green = styles.getPropertyValue("--green").trim() || "#45ffb2";
+    const red = styles.getPropertyValue("--red").trim() || "#ff5c7a";
+    const text = styles.getPropertyValue("--text").trim() || "#e9eef9";
+    const border = styles.getPropertyValue("--border").trim() || "#1b2a44";
+    const muted = styles.getPropertyValue("--muted").trim() || "#a5b4d0";
+
+    const chart = createChart(container, {
+      width: container.clientWidth,
+      height: container.clientHeight,
+      layout: {
+        background: { type: ColorType.Solid, color: "rgba(0,0,0,0)" },
+        textColor: text,
+        attributionLogo: false
+      },
+      grid: {
+        vertLines: { color: border },
+        horzLines: { color: border }
+      },
+      rightPriceScale: { borderColor: border },
+      timeScale: {
+        borderColor: border,
+        rightOffset: 2,
+        timeVisible: true,
+        secondsVisible: false
+      },
+      crosshair: {
+        horzLine: { color: muted },
+        vertLine: { color: muted }
+      }
+    });
+
+    const baseSeries = chart.addSeries(CandlestickSeries, {
+      upColor: green,
+      downColor: red,
+      wickUpColor: muted,
+      wickDownColor: muted,
+      borderVisible: true,
+      borderUpColor: green,
+      borderDownColor: red,
+      wickVisible: true,
+      priceLineVisible: false,
+      priceFormat: {
+        type: "price",
+        precision: priceDigits,
+        minMove: 1 / 10 ** priceDigits
+      }
+    });
+
+    const overlaySeries = chart.addSeries(CandlestickSeries, {
+      upColor: green,
+      downColor: red,
+      wickUpColor: "rgba(0,0,0,0)",
+      wickDownColor: "rgba(0,0,0,0)",
+      borderVisible: false,
+      wickVisible: false,
+      priceLineVisible: false,
+      lastValueVisible: false,
+      priceFormat: {
+        type: "price",
+        precision: priceDigits,
+        minMove: 1 / 10 ** priceDigits
+      }
+    });
+
+    chartRef.current = chart;
+    baseSeriesRef.current = baseSeries;
+    overlaySeriesRef.current = overlaySeries;
+
+    const ro = new ResizeObserver(() => {
+      if (!containerRef.current || !chartRef.current) return;
+      chartRef.current.applyOptions({
+        width: containerRef.current.clientWidth,
+        height: containerRef.current.clientHeight
+      });
+    });
+    ro.observe(container);
+
+    return () => {
+      ro.disconnect();
+      chart.remove();
+      chartRef.current = null;
+      baseSeriesRef.current = null;
+      overlaySeriesRef.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    lastLenRef.current = 0;
+  }, [asset]);
+
+  useEffect(() => {
+    if (!baseSeriesRef.current || !overlaySeriesRef.current) return;
+    baseSeriesRef.current.applyOptions({
+      priceFormat: {
+        type: "price",
+        precision: priceDigits,
+        minMove: 1 / 10 ** priceDigits
+      }
+    });
+    overlaySeriesRef.current.applyOptions({
+      priceFormat: {
+        type: "price",
+        precision: priceDigits,
+        minMove: 1 / 10 ** priceDigits
+      }
+    });
+  }, [priceDigits]);
+
+  useEffect(() => {
+    if (!baseSeriesRef.current || !overlaySeriesRef.current) return;
+    if (baseData.length === 0) {
+      baseSeriesRef.current.setData([]);
+      overlaySeriesRef.current.setData([]);
+      lastLenRef.current = 0;
+      return;
+    }
+
+    baseSeriesRef.current.setData(baseData);
+    overlaySeriesRef.current.setData(overlayData);
+    if (lastLenRef.current === 0 && baseData.length > 0) {
+      const targetBars = 30;
+      const lastIndex = baseData.length - 1;
+      const from = Math.max(0, lastIndex - targetBars + 1);
+      chartRef.current?.timeScale().setVisibleLogicalRange({ from, to: lastIndex });
+    }
+    lastLenRef.current = baseData.length;
+  }, [baseData, overlayData]);
+
+  return (
+    <div className="chartShell">
+      <div className="chartHeader">
+        <div>
+          <div className="chartTitle">Live Candles ({intervalLabel})</div>
+          <div className="chartMetaRow">
+            <div className="chartMeta mono">{symbol} · showing {Array.isArray(candles) ? Math.min(240, candles.length) : 0}</div>
+            <a className="chartAttribution" href="https://www.tradingview.com/" target="_blank" rel="noreferrer">Powered by TradingView</a>
+          </div>
+        </div>
+        <div className="chartLast mono">
+          {lastCandle
+            ? `O ${fmtUsd(lastCandle.open, priceDigits)} · H ${fmtUsd(lastCandle.high, priceDigits)} · L ${fmtUsd(lastCandle.low, priceDigits)} · C ${fmtUsd(lastCandle.close, priceDigits)}`
+            : "-"}
+        </div>
+      </div>
+      <div className="chartCanvas" ref={containerRef} />
+      {(!Array.isArray(candles) || candles.length === 0) ? (
+        <div className="chartEmpty">Waiting for Binance candles…</div>
+      ) : null}
+    </div>
+  );
+}
+
 export default function Page() {
   const [activeAsset, setActiveAsset] = useState("btc");
 
@@ -75,6 +316,7 @@ export default function Page() {
 
   // Binance candles + price per asset (client-side)
   const [binanceByAsset, setBinanceByAsset] = useState({});
+  const [binanceChartByAsset, setBinanceChartByAsset] = useState({});
 
   // CLOB best bid/ask per asset
   const [clobByAsset, setClobByAsset] = useState({});
@@ -82,6 +324,7 @@ export default function Page() {
   const pmWsRef = useRef(null);
   const clobRef = useRef(null);
   const binanceRef = useRef(null);
+  const binanceChartRef = useRef(null);
 
   const activeMeta = metaByAsset[activeAsset] ?? null;
   const activeMetaErr = metaErrByAsset[activeAsset] ?? null;
@@ -95,6 +338,7 @@ export default function Page() {
   const activeBbo = clobByAsset[activeAsset] ?? { marketSlug: null, up: null, down: null };
 
   const bin = binanceByAsset[activeAsset] ?? { status: "-", candles: null, lastTrade: null };
+  const chartBin = binanceChartByAsset[activeAsset] ?? { status: "-", candles: null };
 
   // Fetch Polymarket market meta on tab open, then schedule a rollover fetch at the precise end time.
   // No periodic polling: rollover is controlled by the client clock.
@@ -218,7 +462,7 @@ export default function Page() {
     });
   }, [activeAsset, activeMarketSlug, activeStartTime, pmPrice?.price]);
 
-  // Binance: seed once per active tab (HTTP) then WS updates
+  // Binance (1m): seed once per active tab (HTTP) then WS updates
   useEffect(() => {
     let closed = false;
 
@@ -311,6 +555,89 @@ export default function Page() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeAsset]);
 
+  // Binance (15m chart): separate feed for the candlestick chart
+  useEffect(() => {
+    let closed = false;
+
+    async function start() {
+      const existing = binanceChartByAsset[activeAsset];
+      if (existing?.candles && Array.isArray(existing.candles) && existing.candles.length >= 20) {
+        return;
+      }
+
+      const symbol = normalizeBinanceSymbol(activeAsset);
+
+      setBinanceChartByAsset((p) => ({ ...p, [activeAsset]: { status: "seeding", candles: null } }));
+
+      let candles;
+      try {
+        candles = await seedKlines({ symbol, interval: "15m", limit: 240 });
+      } catch (e) {
+        if (closed) return;
+        setBinanceChartByAsset((p) => ({ ...p, [activeAsset]: { status: `seed_error: ${e?.message ?? String(e)}`, candles: null } }));
+        return;
+      }
+
+      if (closed) return;
+      setBinanceChartByAsset((p) => ({ ...p, [activeAsset]: { status: "ws_connecting", candles } }));
+
+      binanceChartRef.current?.close?.();
+
+      const ws = connectBinanceWs({
+        symbol,
+        interval: "15m",
+        onKline: (k) => {
+          setBinanceChartByAsset((prev) => {
+            const cur = prev[activeAsset] ?? { status: "live", candles: [] };
+            const arr = Array.isArray(cur.candles) ? cur.candles.slice() : [];
+
+            const last = arr[arr.length - 1];
+            if (last && Number(last.openTime) === Number(k.openTime)) {
+              arr[arr.length - 1] = { ...last, ...k, isFinal: undefined };
+            } else {
+              arr.push({
+                openTime: k.openTime,
+                closeTime: k.closeTime,
+                open: k.open,
+                high: k.high,
+                low: k.low,
+                close: k.close,
+                volume: k.volume
+              });
+            }
+
+            if (k.isFinal) {
+              while (arr.length > 240) arr.shift();
+            }
+
+            return { ...prev, [activeAsset]: { ...cur, status: "live", candles: arr } };
+          });
+        },
+        onStatus: ({ status }) => {
+          setBinanceChartByAsset((prev) => {
+            const cur = prev[activeAsset] ?? { status: "-", candles: null };
+            return { ...prev, [activeAsset]: { ...cur, status } };
+          });
+        }
+      });
+
+      binanceChartRef.current = ws;
+    }
+
+    start();
+
+    return () => {
+      closed = true;
+      try {
+        binanceChartRef.current?.close?.();
+      } catch {
+        // ignore
+      }
+      binanceChartRef.current = null;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeAsset]);
+
   // CLOB market WS (best bid/ask for UP+DOWN) active asset only
   useEffect(() => {
     const upTokenId = activeTokens?.upTokenId ?? null;
@@ -354,6 +681,11 @@ export default function Page() {
 
   // === Derived model values (client-side) ===
   const candles = Array.isArray(bin.candles) ? bin.candles : null;
+  const chartCandles = Array.isArray(chartBin.candles) ? chartBin.candles : null;
+  const delta = useMemo(
+    () => computeDeltaSeries(chartCandles ?? [], DELTA_PERIOD, DELTA_MODE),
+    [chartCandles]
+  );
 
   const derived = useMemo(() => {
     if (!candles || candles.length < 60) {
@@ -524,7 +856,43 @@ export default function Page() {
 
       {activeMetaErr ? <div className="error">{activeMetaErr}</div> : null}
 
-      <div className="grid" style={{ marginTop: 14 }}>
+      <section className="card" style={{ marginTop: 14 }}>
+        <div className="cardTop">
+          <div className="cardTitle">Candles</div>
+          <div className="badge"><span className={dotClass(chartBin.status === "live" ? "green" : chartBin.status === "seeding" ? "amber" : "red")} />BN 15m: {String(chartBin.status ?? "-")}</div>
+        </div>
+        <div className="cardBody">
+          <CandleChart candles={chartCandles} seriesData={delta.data} asset={activeAsset} intervalLabel="15m" />
+          <div className="infoTableWrap">
+            <table className="infoTable">
+              <thead>
+                <tr>
+                  <th colSpan={3}>Info Table</th>
+                </tr>
+                <tr>
+                  <th>Method</th>
+                  <th>Demand Strength</th>
+                  <th>Supply Strength</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>Current Candle</td>
+                  <td className="demand">{fmtPct(delta.currentRatio, 2)}</td>
+                  <td className="supply">{fmtPct(delta.currentRatio === null ? null : 1 - delta.currentRatio, 2)}</td>
+                </tr>
+                <tr>
+                  <td>Moving Average (EMA {DELTA_PERIOD})</td>
+                  <td className="demand">{fmtPct(delta.emaRatio, 2)}</td>
+                  <td className="supply">{fmtPct(delta.emaRatio === null ? null : 1 - delta.emaRatio, 2)}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <div className="grid" style={{ marginTop: 18 }}>
         <section className="card">
           <div className="cardTop">
             <div className="cardTitle">Signal</div>
