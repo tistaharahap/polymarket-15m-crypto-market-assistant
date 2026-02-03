@@ -311,6 +311,7 @@ export default function Page() {
   const [activeAsset, setActiveAsset] = useState("btc");
   const [hedgeOffsetCents, setHedgeOffsetCents] = useState(10);
   const [hedgeSizeInput, setHedgeSizeInput] = useState("20");
+  const [maxLegPriceCents, setMaxLegPriceCents] = useState(58);
   const [tradeBusy, setTradeBusy] = useState(false);
   const [tradeStatus, setTradeStatus] = useState(null);
 
@@ -769,9 +770,12 @@ export default function Page() {
   const tradeDisabledReason = useMemo(() => {
     if (!activeTokens?.upTokenId || !activeTokens?.downTokenId) return "Missing token IDs";
     if (!hedgePlan.ok) return hedgePlan.reason;
+    const maxLeg = maxLegPriceCents / 100;
+    const highestLeg = Math.max(hedgePlan.upPrice ?? 0, hedgePlan.downPrice ?? 0);
+    if (Number.isFinite(maxLeg) && highestLeg > maxLeg) return `Highest leg > ${fmtUsd(maxLeg, 2)} (max)`;
     if (!hedgeSize || hedgeSize <= 0) return "Enter a valid share size";
     return "";
-  }, [activeTokens?.upTokenId, activeTokens?.downTokenId, hedgePlan, hedgeSize]);
+  }, [activeTokens?.upTokenId, activeTokens?.downTokenId, hedgePlan, hedgeSize, maxLegPriceCents]);
 
   const tradeBadge = useMemo(() => {
     if (tradeBusy) return { label: "Submitting", dot: "amber" };
@@ -1143,6 +1147,27 @@ export default function Page() {
                     ))}
                   </div>
                 </div>
+                <div className="tradeControl">
+                  <div className="tradeControlLabel">Max Leg Price</div>
+                  <div className="stepper">
+                    <button
+                      className="stepperBtn"
+                      onClick={() => setMaxLegPriceCents((v) => Math.max(1, v - 1))}
+                      disabled={tradeBusy || maxLegPriceCents <= 1}
+                    >
+                      –
+                    </button>
+                    <div className="stepperValue mono">{maxLegPriceCents}¢ max</div>
+                    <button
+                      className="stepperBtn"
+                      onClick={() => setMaxLegPriceCents((v) => Math.min(99, v + 1))}
+                      disabled={tradeBusy || maxLegPriceCents >= 99}
+                    >
+                      +
+                    </button>
+                  </div>
+                  <div className="tradeControlHint mono">{fmtUsd(maxLegPriceCents / 100, 2)} limit</div>
+                </div>
               </div>
 
               <div className="tradeTableWrap">
@@ -1165,6 +1190,7 @@ export default function Page() {
                 <div className="tradeMeta">
                   <div>Best Bid: UP {fmtUsd(hedgePlan.upBid, 2)} · DOWN {fmtUsd(hedgePlan.downBid, 2)}</div>
                   <div>Shares: {hedgeSize ? fmtNum(hedgeSize, 0) : "-"}</div>
+                  <div>Max leg: {fmtUsd(maxLegPriceCents / 100, 2)}</div>
                   {hedgePlan.ok && hedgeSize ? (
                     <div>
                       Preview: BUY {fmtNum(hedgeSize, 0)} UP @ {fmtUsd(hedgePlan.upPrice, 2)} · BUY {fmtNum(hedgeSize, 0)} DOWN @ {fmtUsd(hedgePlan.downPrice, 2)} · Total {fmtUsd(hedgePlan.sum, 2)} (Target {fmtUsd(hedgePlan.targetTotal, 2)}) · Higher {hedgePlan.higherSide.toUpperCase()}
