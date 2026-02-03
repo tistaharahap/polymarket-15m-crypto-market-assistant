@@ -314,6 +314,10 @@ export default function Page() {
   const [maxLegPriceCents, setMaxLegPriceCents] = useState(58);
   const [tradeBusy, setTradeBusy] = useState(false);
   const [tradeStatus, setTradeStatus] = useState(null);
+  const [autoEnabled, setAutoEnabled] = useState(false);
+  const [autoDelaySec, setAutoDelaySec] = useState(30);
+  const [autoConfirmOpen, setAutoConfirmOpen] = useState(false);
+  const [autoStatus, setAutoStatus] = useState(null);
 
   useEffect(() => {
     fetch("/api/trade/init").catch(() => {});
@@ -777,16 +781,34 @@ export default function Page() {
     return "";
   }, [activeTokens?.upTokenId, activeTokens?.downTokenId, hedgePlan, hedgeSize, maxLegPriceCents]);
 
+  const manualDisabledReason = autoEnabled ? "Auto trade mode enabled" : tradeDisabledReason;
+
   const tradeBadge = useMemo(() => {
     if (tradeBusy) return { label: "Submitting", dot: "amber" };
-    if (tradeDisabledReason) return { label: "Disabled", dot: "red" };
+    if (manualDisabledReason) return { label: "Disabled", dot: "red" };
     return { label: "Ready", dot: "green" };
-  }, [tradeBusy, tradeDisabledReason]);
+  }, [tradeBusy, manualDisabledReason]);
 
-  async function submitHedgeOrders() {
-    if (tradeBusy || tradeDisabledReason) return;
+  const autoTimerRef = useRef(null);
+  const autoLastTradeRef = useRef({ slug: null });
+
+  function clearAutoTimer() {
+    if (autoTimerRef.current) {
+      clearTimeout(autoTimerRef.current);
+      autoTimerRef.current = null;
+    }
+  }
+
+  async function submitHedgeOrders({ source = "manual" } = {}) {
+    const reason = source === "auto" ? tradeDisabledReason : manualDisabledReason;
+    if (tradeBusy || reason) {
+      if (source === "auto" && reason) {
+        setAutoStatus({ type: "error", message: reason });
+      }
+      return;
+    }
     setTradeBusy(true);
-    setTradeStatus({ type: "pending", message: "Submitting hedge orders…" });
+    setTradeStatus({ type: "pending", message: source === "auto" ? "Auto trade submitting…" : "Submitting hedge orders…" });
 
     const upTokenId = activeTokens?.upTokenId;
     const downTokenId = activeTokens?.downTokenId;
@@ -867,12 +889,18 @@ export default function Page() {
             message: `${message}. ${cancelNote}.`,
             results
           });
+          if (source === "auto") {
+            setAutoStatus({ type: "error", message: `${message}. ${cancelNote}.` });
+          }
         } else {
           setTradeStatus({
             type: "error",
             message,
             results
           });
+          if (source === "auto") {
+            setAutoStatus({ type: "error", message });
+          }
         }
       } else {
         setTradeStatus({
@@ -880,6 +908,9 @@ export default function Page() {
           message: "Hedge orders submitted",
           results
         });
+        if (source === "auto") {
+          setAutoStatus({ type: "success", message: "Auto trade submitted" });
+        }
       }
     } catch (err) {
       setTradeStatus({
@@ -887,10 +918,50 @@ export default function Page() {
         message: err?.message ?? String(err),
         results
       });
+      if (source === "auto") {
+        setAutoStatus({ type: "error", message: err?.message ?? String(err) });
+      }
     } finally {
       setTradeBusy(false);
     }
   }
+
+  useEffect(() => {
+    if (!autoEnabled) {
+      clearAutoTimer();
+      setAutoStatus(null);
+      return;
+    }
+
+    clearAutoTimer();
+
+    const startMs = activeStartTime ? new Date(activeStartTime).getTime() : null;
+    if (!Number.isFinite(startMs)) {
+      setAutoStatus({ type: "error", message: "Waiting for market start time" });
+      return;
+    }
+
+    const fireAt = startMs + autoDelaySec * 1000;
+    if (Date.now() > fireAt) {
+      setAutoStatus({ type: "error", message: "Auto window passed; no trades allowed" });
+      return;
+    }
+
+    if (autoLastTradeRef.current.slug && autoLastTradeRef.current.slug === activeMarketSlug) {
+      setAutoStatus({ type: "info", message: "Auto already fired for this window" });
+      return;
+    }
+
+    const delay = Math.max(0, fireAt - Date.now());
+    setAutoStatus({ type: "pending", message: `Auto trade scheduled for ${new Date(fireAt).toLocaleTimeString()}` });
+    autoTimerRef.current = setTimeout(async () => {
+      if (!autoEnabled) return;
+      autoLastTradeRef.current = { slug: activeMarketSlug ?? null };
+      await submitHedgeOrders({ source: "auto" });
+    }, delay);
+
+    return () => clearAutoTimer();
+  }, [autoEnabled, activeStartTime, autoDelaySec, activeMarketSlug, tradeDisabledReason]);
 
   const derived = useMemo(() => {
     if (!candles || candles.length < 60) {
@@ -1099,7 +1170,16 @@ export default function Page() {
             <div className="tradeConsole">
               <div className="tradeConsoleHeader">
                 <div className="cardTitle">Trade (Hedged)</div>
-                <div className="badge"><span className={dotClass(tradeBadge.dot)} />{tradeBadge.label}</div>
+                <div className="tradeHeaderActions">
+                  <div className="badge"><span className={dotClass(tradeBadge.dot)} />{tradeBadge.label}</div>
+                  <button
+                    className="btn"
+                    onClick={() => (autoEnabled ? setAutoEnabled(false) : setAutoConfirmOpen(true))}
+                    disabled={tradeBusy}
+                  >
+                    {autoEnabled ? "Disable Auto" : "Enable Auto"}
+                  </button>
+                </div>
               </div>
 
               <div className="tradeControls">
@@ -1109,7 +1189,7 @@ export default function Page() {
                     <button
                       className="stepperBtn"
                       onClick={() => setHedgeOffsetCents((v) => Math.max(1, v - 1))}
-                      disabled={tradeBusy || hedgeOffsetCents <= 1}
+                      disabled={tradeBusy || autoEnabled || hedgeOffsetCents <= 1}
                     >
                       –
                     </button>
@@ -1117,7 +1197,7 @@ export default function Page() {
                     <button
                       className="stepperBtn"
                       onClick={() => setHedgeOffsetCents((v) => Math.min(30, v + 1))}
-                      disabled={tradeBusy || hedgeOffsetCents >= 30}
+                      disabled={tradeBusy || autoEnabled || hedgeOffsetCents >= 30}
                     >
                       +
                     </button>
@@ -1132,7 +1212,7 @@ export default function Page() {
                     step="1"
                     value={hedgeSizeInput}
                     onChange={(e) => setHedgeSizeInput(e.target.value)}
-                    disabled={tradeBusy}
+                    disabled={tradeBusy || autoEnabled}
                   />
                   <div className="shareButtons">
                     {[-50, -20, -10, 10, 20, 50].map((delta) => (
@@ -1140,7 +1220,7 @@ export default function Page() {
                         key={delta}
                         className="shareBtn"
                         onClick={() => adjustHedgeSize(delta)}
-                        disabled={tradeBusy}
+                        disabled={tradeBusy || autoEnabled}
                       >
                         {delta > 0 ? `+${delta}` : `${delta}`}
                       </button>
@@ -1153,7 +1233,7 @@ export default function Page() {
                     <button
                       className="stepperBtn"
                       onClick={() => setMaxLegPriceCents((v) => Math.max(1, v - 1))}
-                      disabled={tradeBusy || maxLegPriceCents <= 1}
+                      disabled={tradeBusy || autoEnabled || maxLegPriceCents <= 1}
                     >
                       –
                     </button>
@@ -1161,12 +1241,32 @@ export default function Page() {
                     <button
                       className="stepperBtn"
                       onClick={() => setMaxLegPriceCents((v) => Math.min(99, v + 1))}
-                      disabled={tradeBusy || maxLegPriceCents >= 99}
+                      disabled={tradeBusy || autoEnabled || maxLegPriceCents >= 99}
                     >
                       +
                     </button>
                   </div>
                   <div className="tradeControlHint mono">{fmtUsd(maxLegPriceCents / 100, 2)} limit</div>
+                </div>
+                <div className="tradeControl">
+                  <div className="tradeControlLabel">Auto Delay</div>
+                  <div className="stepper">
+                    <button
+                      className="stepperBtn"
+                      onClick={() => setAutoDelaySec((v) => Math.max(5, v - 5))}
+                      disabled={tradeBusy || autoEnabled || autoDelaySec <= 5}
+                    >
+                      –
+                    </button>
+                    <div className="stepperValue mono">{autoDelaySec}s after start</div>
+                    <button
+                      className="stepperBtn"
+                      onClick={() => setAutoDelaySec((v) => Math.min(300, v + 5))}
+                      disabled={tradeBusy || autoEnabled || autoDelaySec >= 300}
+                    >
+                      +
+                    </button>
+                  </div>
                 </div>
               </div>
 
@@ -1201,11 +1301,17 @@ export default function Page() {
                 </div>
               </div>
 
+              {autoStatus ? (
+                <div className={`autoStatus ${autoStatus.type}`}>
+                  {autoStatus.message}
+                </div>
+              ) : null}
+
               <div className="tradeActions">
-                <button className="btn" onClick={submitHedgeOrders} disabled={tradeBusy || Boolean(tradeDisabledReason)}>
+                <button className="btn" onClick={() => submitHedgeOrders({ source: "manual" })} disabled={tradeBusy || Boolean(manualDisabledReason)}>
                   Place Hedge Orders
                 </button>
-                {tradeDisabledReason ? <div className="tradeHint">{tradeDisabledReason}</div> : null}
+                {manualDisabledReason ? <div className="tradeHint">{manualDisabledReason}</div> : null}
               </div>
 
               {tradeStatus ? (
@@ -1217,6 +1323,42 @@ export default function Page() {
                       <div>DOWN: {tradeStatus.results[activeTokens.downTokenId]?.orderId ?? "-"}</div>
                     </div>
                   ) : null}
+                </div>
+              ) : null}
+
+              {autoConfirmOpen ? (
+                <div className="modalBackdrop">
+                  <div className="modal">
+                    <div className="modalTitle">Enable Auto Trade</div>
+                    <div className="modalBody">
+                      <div className="modalWarning">
+                        Auto Trade will place hedged BUY orders exactly {autoDelaySec}s after the market window starts. If that time has already passed, no trades will be placed while Auto is on.
+                      </div>
+                      <div className="modalList">
+                        <div>Asset: {activeAsset.toUpperCase()}</div>
+                        <div>Offset: {hedgeOffsetCents}¢ under $1</div>
+                        <div>Shares: {hedgeSize ? fmtNum(hedgeSize, 0) : "-"}</div>
+                        <div>Max leg: {fmtUsd(maxLegPriceCents / 100, 2)}</div>
+                        <div>Auto delay: {autoDelaySec}s</div>
+                        <div>Best bid: UP {fmtUsd(hedgePlan.upBid, 2)} · DOWN {fmtUsd(hedgePlan.downBid, 2)}</div>
+                        <div>Order prices: UP {hedgePlan.ok ? fmtUsd(hedgePlan.upPrice, 2) : "-"} · DOWN {hedgePlan.ok ? fmtUsd(hedgePlan.downPrice, 2) : "-"}</div>
+                        <div>Status: {tradeDisabledReason || "Ready"}</div>
+                      </div>
+                    </div>
+                    <div className="modalActions">
+                      <button className="btn" onClick={() => setAutoConfirmOpen(false)} disabled={tradeBusy}>Cancel</button>
+                      <button
+                        className="btn primary"
+                        onClick={() => {
+                          setAutoConfirmOpen(false);
+                          setAutoEnabled(true);
+                        }}
+                        disabled={tradeBusy}
+                      >
+                        Confirm & Enable
+                      </button>
+                    </div>
+                  </div>
                 </div>
               ) : null}
             </div>

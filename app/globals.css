@@ -211,6 +211,11 @@ a{color:inherit}
 }
 .btn:hover{border-color: rgba(89,215,255,.7)}
 
+.btn.primary{
+  border-color: rgba(89,215,255,.7);
+  box-shadow: 0 0 0 4px rgba(89,215,255,.12);
+}
+
 .error{
   border: 1px solid rgba(255,92,122,.55);
   background: rgba(255,92,122,.08);
@@ -317,6 +322,13 @@ a{color:inherit}
   justify-content:space-between;
   margin-bottom: 10px;
   gap:10px;
+}
+
+.tradeHeaderActions{
+  display:flex;
+  align-items:center;
+  gap:10px;
+  flex-wrap:wrap;
 }
 
 .infoTable{
@@ -511,6 +523,36 @@ a{color:inherit}
   font-size: 12px;
 }
 
+.autoStatus{
+  margin-top: 10px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid rgba(27,42,68,.7);
+  background: rgba(7,8,11,.3);
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.autoStatus.success{
+  border-color: rgba(69,255,178,.35);
+  color: var(--green);
+}
+
+.autoStatus.error{
+  border-color: rgba(255,92,122,.4);
+  color: #ff9fb3;
+}
+
+.autoStatus.pending{
+  border-color: rgba(255,204,102,.4);
+  color: var(--amber);
+}
+
+.autoStatus.info{
+  border-color: rgba(89,215,255,.35);
+  color: var(--cyan);
+}
+
 .tradeMeta{
   margin-top: 10px;
   color: var(--muted);
@@ -553,6 +595,65 @@ a{color:inherit}
   color: var(--text);
   display:flex;
   gap:14px;
+  flex-wrap:wrap;
+}
+
+.modalBackdrop{
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,.6);
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  padding: 24px;
+  z-index: 1000;
+}
+
+.modal{
+  width: min(520px, 100%);
+  background: rgba(7,8,11,.92);
+  border: 1px solid rgba(27,42,68,.8);
+  border-radius: 16px;
+  padding: 18px;
+  box-shadow: var(--shadow);
+}
+
+.modalTitle{
+  font-size: 14px;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  color: var(--text);
+  margin-bottom: 10px;
+}
+
+.modalBody{
+  font-size: 12px;
+  color: var(--muted);
+  display:flex;
+  flex-direction:column;
+  gap:10px;
+}
+
+.modalWarning{
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(255,204,102,.4);
+  color: var(--amber);
+  background: rgba(255,204,102,.08);
+}
+
+.modalList{
+  display:flex;
+  flex-direction:column;
+  gap:4px;
+  color: var(--text);
+}
+
+.modalActions{
+  margin-top: 14px;
+  display:flex;
+  justify-content:flex-end;
+  gap:10px;
   flex-wrap:wrap;
 }
 
