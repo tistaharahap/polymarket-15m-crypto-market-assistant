@@ -77,6 +77,8 @@ const ORDER_POLL_INTERVAL_MS = 1500;
 const ORDER_POLL_TIMEOUT_MS = 60_000;
 const HEDGE_TAKER_BUFFER_CENTS = 10;
 const HEDGE_TAKER_MAX_PRICE = 0.99;
+const HEDGE_TAKER_MAX_RETRIES = 8;
+const HEDGE_TAKER_RETRY_DELAY_MS = 500;
 
 function normalizeStatus(value) {
   return String(value ?? "").toLowerCase();
@@ -954,21 +956,41 @@ export default function Page() {
       return { ok: false, message };
     }
 
-    const hedgeRes = await fetch("/api/trade/limit", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        tokenId: hedgeTokenId,
-        side: "BUY",
-        price: hedgeLimitPrice,
-        size: hedgeSize,
-        orderType: "FAK",
-        postOnly: false
-      })
-    });
-    const hedgeData = await hedgeRes.json().catch(() => ({}));
-    if (!hedgeRes.ok) {
-      const message = hedgeData?.error || `Hedge order failed (HTTP ${hedgeRes.status})`;
+    let hedgeRes = null;
+    let hedgeData = null;
+    let lastError = null;
+    for (let attempt = 1; attempt <= HEDGE_TAKER_MAX_RETRIES; attempt += 1) {
+      lastError = null;
+      try {
+        hedgeRes = await fetch("/api/trade/limit", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            tokenId: hedgeTokenId,
+            side: "BUY",
+            price: hedgeLimitPrice,
+            size: hedgeSize,
+            orderType: "FAK",
+            postOnly: false
+          })
+        });
+        hedgeData = await hedgeRes.json().catch(() => ({}));
+      } catch (err) {
+        lastError = err?.message ?? String(err);
+      }
+
+      if (hedgeRes?.ok) break;
+      if (!lastError) {
+        const status = hedgeRes?.status ?? "unknown";
+        lastError = hedgeData?.error || `Hedge order failed (HTTP ${status})`;
+      }
+      if (attempt < HEDGE_TAKER_MAX_RETRIES) {
+        await sleep(HEDGE_TAKER_RETRY_DELAY_MS);
+      }
+    }
+
+    if (!hedgeRes?.ok) {
+      const message = `${lastError || "Hedge order failed"} (after ${HEDGE_TAKER_MAX_RETRIES} attempts)`;
       setTradeStatus({ type: "error", message, results });
       if (source === "auto") {
         setAutoStatus({ type: "error", message });
