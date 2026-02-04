@@ -1168,33 +1168,30 @@ export default function Page() {
 
       if (errors.length) {
         const message = errors[0]?.message ?? String(errors[0]);
-        const orderIds = Object.values(results)
-          .map((r) => r?.orderId)
-          .filter(Boolean);
+        const orderEntries = Object.entries(results)
+          .map(([tokenId, data]) => ({ tokenId, orderId: data?.orderId }))
+          .filter((entry) => entry.orderId);
+        const orderIds = orderEntries.map((entry) => entry.orderId);
 
         if (orderIds.length) {
-          const polled = await Promise.all(orderIds.map(async (orderId) => pollOrderStatus(orderId)));
-          const filled = polled
-            .map((poll, idx) => ({ poll, orderId: orderIds[idx] }))
-            .filter((entry) => entry.poll?.filled);
+          const polled = await Promise.all(orderEntries.map(async (entry) => ({
+            ...entry,
+            poll: await pollOrderStatus(entry.orderId)
+          })));
+          const withMatch = polled.filter((entry) => entry.poll?.hasMatch);
+          const missing = polled.filter((entry) => entry.poll?.missing);
+          let hedgeTarget = null;
+          let hedgeNote = null;
 
-          if (filled.length) {
-            const filledOrderId = filled[0].orderId;
-            const filledTokenId = Object.entries(results)
-              .find(([, data]) => data?.orderId === filledOrderId)?.[0] ?? null;
-            const filledSize = Number.isFinite(filled[0].poll?.matched) ? filled[0].poll.matched : hedgeSize;
-
-            if (filledTokenId) {
-              await hedgeWithTaker({
-                filledTokenId,
-                filledSize,
-                orderIds,
-                results,
-                entryBase,
-                source
-              });
-              return;
-            }
+          if (withMatch.length) {
+            const best = withMatch.sort((a, b) => (b.poll?.matched ?? 0) - (a.poll?.matched ?? 0))[0];
+            const matchedSize = Number.isFinite(best.poll?.matched) ? best.poll.matched : hedgeSize;
+            hedgeTarget = { tokenId: best.tokenId, size: matchedSize };
+            hedgeNote = "Partial fill detected; hedged matched size via taker limit";
+          } else if (missing.length) {
+            const missingEntry = missing[0];
+            hedgeTarget = { tokenId: missingEntry.tokenId, size: hedgeSize };
+            hedgeNote = "Order not found; assumed filled and hedged via taker limit";
           }
 
           const cancelResults = await Promise.allSettled(orderIds.map(async (orderId) => {
@@ -1215,6 +1212,19 @@ export default function Page() {
           const cancelNote = cancelFailures.length
             ? `Canceled ${canceled}/${orderIds.length} (some cancel failures)`
             : `Canceled ${canceled}/${orderIds.length}`;
+
+          if (hedgeTarget?.tokenId) {
+            await hedgeWithTaker({
+              filledTokenId: hedgeTarget.tokenId,
+              filledSize: hedgeTarget.size,
+              orderIds,
+              results,
+              entryBase,
+              source,
+              note: hedgeNote
+            });
+            return;
+          }
 
           setTradeStatus({
             type: "error",
