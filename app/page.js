@@ -79,6 +79,7 @@ const HEDGE_TAKER_BUFFER_CENTS = 10;
 const HEDGE_TAKER_MAX_PRICE = 0.99;
 const HEDGE_TAKER_MAX_RETRIES = 8;
 const HEDGE_TAKER_RETRY_DELAY_MS = 500;
+const HEDGE_TAKER_MIN_SHARES = 5;
 
 function normalizeStatus(value) {
   return String(value ?? "").toLowerCase();
@@ -941,7 +942,37 @@ export default function Page() {
       : fallbackTakerPrice;
     const hedgeSize = filledSize;
 
-    if (!hedgeSize || hedgeSize <= 0 || !Number.isFinite(hedgeLimitPrice)) {
+    if (!hedgeSize || hedgeSize <= 0) {
+      const message = "Partial fill detected; unable to compute hedge order";
+      setTradeStatus({ type: "error", message, results });
+      if (source === "auto") {
+        setAutoStatus({ type: "error", message });
+      }
+      addHistoryEntry({
+        ...entryBase,
+        status: "error",
+        orderIds,
+        error: message
+      });
+      return { ok: false, message };
+    }
+
+    if (hedgeSize < HEDGE_TAKER_MIN_SHARES) {
+      const message = `Hedge skipped; matched size ${fmtNum(hedgeSize, 4)} sh below ${HEDGE_TAKER_MIN_SHARES} sh minimum (triggered by ${filledLeg})`;
+      setTradeStatus({ type: "success", message, results });
+      if (source === "auto") {
+        setAutoStatus({ type: "success", message });
+      }
+      addHistoryEntry({
+        ...entryBase,
+        status: "success",
+        orderIds,
+        note: message
+      });
+      return { ok: false, message };
+    }
+
+    if (!Number.isFinite(hedgeLimitPrice)) {
       const message = "Partial fill detected; unable to compute hedge order";
       setTradeStatus({ type: "error", message, results });
       if (source === "auto") {
