@@ -52,6 +52,10 @@ function roundDownToCent(value) {
   return Math.floor(Number(value) * 100) / 100;
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function fmtTimeLeft(mins) {
   if (mins === null || mins === undefined || !Number.isFinite(Number(mins))) return "-";
   const totalSeconds = Math.max(0, Math.floor(Number(mins) * 60));
@@ -69,6 +73,55 @@ function dotClass(kind) {
 
 const DELTA_PERIOD = 21;
 const DELTA_MODE = "EMA";
+const ORDER_POLL_INTERVAL_MS = 1500;
+const ORDER_POLL_TIMEOUT_MS = 60_000;
+
+function normalizeStatus(value) {
+  return String(value ?? "").toLowerCase();
+}
+
+function isTerminalStatus(status) {
+  return ["filled", "cancelled", "canceled", "expired", "rejected"].includes(status);
+}
+
+function parseSizeValue(value) {
+  const num = Number(value);
+  return Number.isFinite(num) ? num : null;
+}
+
+function getFillStats(order, fallbackSize) {
+  const original = parseSizeValue(order?.original_size ?? order?.originalSize ?? fallbackSize);
+  const matched = parseSizeValue(order?.size_matched ?? order?.sizeMatched ?? 0) ?? 0;
+  const status = normalizeStatus(order?.status);
+  const filled = original !== null ? matched >= original - 1e-6 : status === "filled";
+  return { original, matched, filled, status };
+}
+
+async function pollOrderStatus(orderId, { intervalMs = ORDER_POLL_INTERVAL_MS, timeoutMs = ORDER_POLL_TIMEOUT_MS } = {}) {
+  const deadline = Date.now() + timeoutMs;
+  let last = null;
+
+  while (Date.now() < deadline) {
+    try {
+      const res = await fetch(`/api/trade/order?orderId=${encodeURIComponent(orderId)}`, { cache: "no-store" });
+      if (res.ok) {
+        const order = await res.json();
+        last = order;
+        const stats = getFillStats(order, null);
+        if (stats.filled || isTerminalStatus(stats.status)) {
+          return { order, ...stats, timedOut: false };
+        }
+      }
+    } catch {
+      // ignore polling errors, retry
+    }
+
+    await sleep(intervalMs);
+  }
+
+  const stats = getFillStats(last, null);
+  return { order: last, ...stats, timedOut: true };
+}
 
 function computeDeltaSeries(candles, period = DELTA_PERIOD, mode = DELTA_MODE) {
   if (!Array.isArray(candles) || candles.length === 0) {
@@ -312,6 +365,7 @@ export default function Page() {
   const [hedgeOffsetCents, setHedgeOffsetCents] = useState(10);
   const [hedgeSizeInput, setHedgeSizeInput] = useState("20");
   const [maxLegPriceCents, setMaxLegPriceCents] = useState(58);
+  const [maxSpreadCents, setMaxSpreadCents] = useState(1);
   const [tradeBusy, setTradeBusy] = useState(false);
   const [tradeStatus, setTradeStatus] = useState(null);
   const [autoEnabled, setAutoEnabled] = useState(false);
@@ -712,6 +766,8 @@ export default function Page() {
   const hedgePlan = useMemo(() => {
     const upBid = activeBbo?.up?.bid ?? null;
     const downBid = activeBbo?.down?.bid ?? null;
+    const upAsk = activeBbo?.up?.ask ?? null;
+    const downAsk = activeBbo?.down?.ask ?? null;
     const targetTotal = (100 - hedgeOffsetCents) / 100;
 
     if (!Number.isFinite(upBid) || !Number.isFinite(downBid)) {
@@ -720,9 +776,16 @@ export default function Page() {
         reason: "Waiting for best bids",
         upBid,
         downBid,
+        upAsk,
+        downAsk,
+        upSpread: null,
+        downSpread: null,
         targetTotal
       };
     }
+
+    const upSpread = Number.isFinite(upAsk) ? Math.max(0, upAsk - upBid) : null;
+    const downSpread = Number.isFinite(downAsk) ? Math.max(0, downAsk - downBid) : null;
 
     const higherSide = downBid >= upBid ? "down" : "up";
     const higherBid = higherSide === "down" ? downBid : upBid;
@@ -739,24 +802,48 @@ export default function Page() {
     const sum = upPrice + downPrice;
 
     if (!Number.isFinite(upPrice) || !Number.isFinite(downPrice)) {
-      return { ok: false, reason: "Invalid price calculation", upBid, downBid, targetTotal };
+      return {
+        ok: false,
+        reason: "Invalid price calculation",
+        upBid,
+        downBid,
+        upAsk,
+        downAsk,
+        upSpread,
+        downSpread,
+        targetTotal
+      };
     }
 
     if (upPrice <= 0 || downPrice <= 0) {
-      return { ok: false, reason: "Offset too large for current bids", upBid, downBid, targetTotal };
+      return {
+        ok: false,
+        reason: "Offset too large for current bids",
+        upBid,
+        downBid,
+        upAsk,
+        downAsk,
+        upSpread,
+        downSpread,
+        targetTotal
+      };
     }
 
     return {
       ok: true,
       upBid,
       downBid,
+      upAsk,
+      downAsk,
+      upSpread,
+      downSpread,
       higherSide,
       targetTotal,
       upPrice,
       downPrice,
       sum
     };
-  }, [activeBbo?.up?.bid, activeBbo?.down?.bid, hedgeOffsetCents]);
+  }, [activeBbo?.up?.bid, activeBbo?.down?.bid, activeBbo?.up?.ask, activeBbo?.down?.ask, hedgeOffsetCents]);
 
   const hedgeSize = useMemo(() => {
     const num = Number(hedgeSizeInput);
@@ -778,9 +865,16 @@ export default function Page() {
     const maxLeg = maxLegPriceCents / 100;
     const highestLeg = Math.max(hedgePlan.upPrice ?? 0, hedgePlan.downPrice ?? 0);
     if (Number.isFinite(maxLeg) && highestLeg > maxLeg) return `Highest leg > ${fmtUsd(maxLeg, 2)} (max)`;
+    const maxSpread = maxSpreadCents / 100;
+    if (Number.isFinite(maxSpread)) {
+      const upSpread = hedgePlan.upSpread;
+      const downSpread = hedgePlan.downSpread;
+      if (!Number.isFinite(upSpread) || !Number.isFinite(downSpread)) return "Waiting for best asks";
+      if (upSpread > maxSpread || downSpread > maxSpread) return `Spread > ${fmtUsd(maxSpread, 2)} (max)`;
+    }
     if (!hedgeSize || hedgeSize <= 0) return "Enter a valid share size";
     return "";
-  }, [activeTokens?.upTokenId, activeTokens?.downTokenId, hedgePlan, hedgeSize, maxLegPriceCents]);
+  }, [activeTokens?.upTokenId, activeTokens?.downTokenId, hedgePlan, hedgeSize, maxLegPriceCents, maxSpreadCents]);
 
   const manualDisabledReason = autoEnabled ? "Auto trade mode enabled" : tradeDisabledReason;
 
@@ -814,6 +908,12 @@ export default function Page() {
       asset: activeAsset,
       upPrice: hedgePlan.upPrice,
       downPrice: hedgePlan.downPrice,
+      upBid: hedgePlan.upBid,
+      downBid: hedgePlan.downBid,
+      upAsk: hedgePlan.upAsk,
+      downAsk: hedgePlan.downAsk,
+      upSpread: hedgePlan.upSpread,
+      downSpread: hedgePlan.downSpread,
       size: hedgeSize,
       target: hedgePlan.targetTotal,
       sum: hedgePlan.sum,
@@ -867,6 +967,7 @@ export default function Page() {
       ];
 
     const results = {};
+    const orderType = "FOK";
 
     try {
       const requests = payloads.map(async (payload) => {
@@ -878,12 +979,13 @@ export default function Page() {
             side: payload.side,
             price: payload.price,
             size: hedgeSize,
-            postOnly: true
+            orderType,
+            postOnly: false
           })
         });
         const data = await res.json().catch(() => ({}));
         if (!res.ok) throw new Error(data?.error || `Order failed (HTTP ${res.status})`);
-        return { tokenId: payload.tokenId, data };
+        return { tokenId: payload.tokenId, data, payload };
       });
 
       const settled = await Promise.allSettled(requests);
@@ -952,22 +1054,146 @@ export default function Page() {
             error: message
           });
         }
-      } else {
-        const orderIds = Object.values(results).map((r) => r?.orderId).filter(Boolean);
+        return;
+      }
+
+      const orderEntries = Object.entries(results)
+        .map(([tokenId, data]) => ({ tokenId, orderId: data?.orderId }))
+        .filter((entry) => entry.orderId);
+      const orderIds = orderEntries.map((entry) => entry.orderId);
+
+      if (!orderEntries.length) {
+        throw new Error("Orders returned without order IDs");
+      }
+
+      setTradeStatus({ type: "pending", message: "Polling order fills…" });
+      if (source === "auto") {
+        setAutoStatus({ type: "pending", message: "Polling order fills…" });
+      }
+
+      const polled = await Promise.all(orderEntries.map(async (entry) => ({
+        ...entry,
+        poll: await pollOrderStatus(entry.orderId)
+      })));
+
+      const filled = polled.filter((entry) => entry.poll?.filled);
+      const unfilled = polled.filter((entry) => !entry.poll?.filled);
+
+      const openToCancel = unfilled.filter((entry) => !isTerminalStatus(entry.poll?.status));
+      if (openToCancel.length) {
+        await Promise.allSettled(openToCancel.map(async (entry) => {
+          await fetch("/api/trade/cancel", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ orderId: entry.orderId })
+          });
+        }));
+      }
+
+      if (filled.length === 2) {
         setTradeStatus({
           type: "success",
-          message: "Hedge orders submitted",
+          message: "Hedge orders filled",
           results
         });
         if (source === "auto") {
-          setAutoStatus({ type: "success", message: "Auto trade submitted" });
+          setAutoStatus({ type: "success", message: "Auto hedge filled" });
         }
         addHistoryEntry({
           ...entryBase,
           status: "success",
           orderIds
         });
+        return;
       }
+
+      if (filled.length === 0) {
+        const statusSummary = polled
+          .map((entry) => `${entry.tokenId}:${entry.poll?.status || "unknown"}`)
+          .join(" · ");
+        const message = `Orders not filled (${statusSummary})`;
+        setTradeStatus({ type: "error", message, results });
+        if (source === "auto") {
+          setAutoStatus({ type: "error", message });
+        }
+        addHistoryEntry({
+          ...entryBase,
+          status: "canceled",
+          orderIds,
+          error: message
+        });
+        return;
+      }
+
+      const filledEntry = filled[0];
+      const unfilledEntry = unfilled[0];
+      const filledSize = Number.isFinite(filledEntry.poll?.matched) ? filledEntry.poll.matched : hedgeSize;
+      const hedgeTokenId = unfilledEntry.tokenId;
+      const hedgeAsk = hedgeTokenId === upTokenId ? hedgePlan.upAsk : hedgePlan.downAsk;
+      const hedgeLimitPrice = Number.isFinite(hedgeAsk) ? hedgeAsk : unfilledEntry.poll?.order?.price ?? null;
+      const hedgeAmount = Number.isFinite(hedgeLimitPrice) ? roundToCent(filledSize * hedgeLimitPrice) : null;
+
+      if (!hedgeAmount || hedgeAmount <= 0) {
+        const message = "Partial fill detected; unable to compute hedge amount";
+        setTradeStatus({ type: "error", message, results });
+        if (source === "auto") {
+          setAutoStatus({ type: "error", message });
+        }
+        addHistoryEntry({
+          ...entryBase,
+          status: "error",
+          orderIds,
+          error: message
+        });
+        return;
+      }
+
+      const hedgeRes = await fetch("/api/trade/market", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          tokenId: hedgeTokenId,
+          side: "BUY",
+          amount: hedgeAmount,
+          price: hedgeLimitPrice ?? undefined,
+          orderType: "FAK"
+        })
+      });
+      const hedgeData = await hedgeRes.json().catch(() => ({}));
+      if (!hedgeRes.ok) {
+        const message = hedgeData?.error || `Hedge order failed (HTTP ${hedgeRes.status})`;
+        setTradeStatus({ type: "error", message, results });
+        if (source === "auto") {
+          setAutoStatus({ type: "error", message });
+        }
+        addHistoryEntry({
+          ...entryBase,
+          status: "error",
+          orderIds,
+          error: message
+        });
+        return;
+      }
+
+      const hedgeOrderId = hedgeData?.orderId;
+      const hedgePoll = hedgeOrderId ? await pollOrderStatus(hedgeOrderId) : null;
+      const hedgeFilled = hedgePoll?.filled;
+      const hedgeStatus = hedgePoll?.status || hedgeData?.status || "unknown";
+
+      const message = hedgeFilled
+        ? "One leg filled; hedge FAK filled"
+        : `One leg filled; hedge status ${hedgeStatus}`;
+      setTradeStatus({ type: hedgeFilled ? "success" : "error", message, results });
+      if (source === "auto") {
+        setAutoStatus({ type: hedgeFilled ? "success" : "error", message });
+      }
+      addHistoryEntry({
+        ...entryBase,
+        status: hedgeFilled ? "hedged" : "error",
+        orderIds: hedgeOrderId ? [...orderIds, hedgeOrderId] : orderIds,
+        error: hedgeFilled ? undefined : message,
+        note: `Hedge ${hedgeFilled ? "filled" : "attempted"} via FAK`
+      });
     } catch (err) {
       setTradeStatus({
         type: "error",
@@ -1232,6 +1458,9 @@ export default function Page() {
                       {entry.orderIds?.length ? (
                         <div className="tradeHistoryRow mono">Order IDs: {entry.orderIds.join(", ")}</div>
                       ) : null}
+                      {entry.note ? (
+                        <div className="tradeHistoryRow">{entry.note}</div>
+                      ) : null}
                       {entry.error ? (
                         <div className="tradeHistoryRow error">{entry.error}</div>
                       ) : null}
@@ -1325,6 +1554,27 @@ export default function Page() {
                   <div className="tradeControlHint mono">{fmtUsd(maxLegPriceCents / 100, 2)} limit</div>
                 </div>
                 <div className="tradeControl">
+                  <div className="tradeControlLabel">Max Spread</div>
+                  <div className="stepper">
+                    <button
+                      className="stepperBtn"
+                      onClick={() => setMaxSpreadCents((v) => Math.max(1, v - 1))}
+                      disabled={tradeBusy || autoEnabled || maxSpreadCents <= 1}
+                    >
+                      –
+                    </button>
+                    <div className="stepperValue mono">{maxSpreadCents}¢ max</div>
+                    <button
+                      className="stepperBtn"
+                      onClick={() => setMaxSpreadCents((v) => Math.min(10, v + 1))}
+                      disabled={tradeBusy || autoEnabled || maxSpreadCents >= 10}
+                    >
+                      +
+                    </button>
+                  </div>
+                  <div className="tradeControlHint mono">{fmtUsd(maxSpreadCents / 100, 2)} limit</div>
+                </div>
+                <div className="tradeControl">
                   <div className="tradeControlLabel">Auto Delay</div>
                   <div className="stepper">
                     <button
@@ -1365,8 +1615,10 @@ export default function Page() {
                 </table>
                 <div className="tradeMeta">
                   <div>Best Bid: UP {fmtUsd(hedgePlan.upBid, 2)} · DOWN {fmtUsd(hedgePlan.downBid, 2)}</div>
+                  <div>Spread: UP {Number.isFinite(hedgePlan.upSpread) ? `${fmtNum(hedgePlan.upSpread * 100, 2)}¢` : "-"} · DOWN {Number.isFinite(hedgePlan.downSpread) ? `${fmtNum(hedgePlan.downSpread * 100, 2)}¢` : "-"}</div>
                   <div>Shares: {hedgeSize ? fmtNum(hedgeSize, 0) : "-"}</div>
                   <div>Max leg: {fmtUsd(maxLegPriceCents / 100, 2)}</div>
+                  <div>Max spread: {fmtUsd(maxSpreadCents / 100, 2)}</div>
                   {hedgePlan.ok && hedgeSize ? (
                     <div>
                       Preview: BUY {fmtNum(hedgeSize, 0)} UP @ {fmtUsd(hedgePlan.upPrice, 2)} · BUY {fmtNum(hedgeSize, 0)} DOWN @ {fmtUsd(hedgePlan.downPrice, 2)} · Total {fmtUsd(hedgePlan.sum, 2)} (Target {fmtUsd(hedgePlan.targetTotal, 2)}) · Higher {hedgePlan.higherSide.toUpperCase()}
@@ -1408,15 +1660,17 @@ export default function Page() {
                     <div className="modalTitle">Enable Auto Trade</div>
                     <div className="modalBody">
                       <div className="modalWarning">
-                        Auto Trade will place hedged BUY orders exactly {autoDelaySec}s after the market window starts. If that time has already passed, no trades will be placed while Auto is on.
+                        Auto Trade will place hedged BUY orders exactly {autoDelaySec}s after the market window starts. If that time has already passed, the next window will be scheduled.
                       </div>
                       <div className="modalList">
                         <div>Asset: {activeAsset.toUpperCase()}</div>
                         <div>Offset: {hedgeOffsetCents}¢ under $1</div>
                         <div>Shares: {hedgeSize ? fmtNum(hedgeSize, 0) : "-"}</div>
                         <div>Max leg: {fmtUsd(maxLegPriceCents / 100, 2)}</div>
+                        <div>Max spread: {fmtUsd(maxSpreadCents / 100, 2)}</div>
                         <div>Auto delay: {autoDelaySec}s</div>
                         <div>Best bid: UP {fmtUsd(hedgePlan.upBid, 2)} · DOWN {fmtUsd(hedgePlan.downBid, 2)}</div>
+                        <div>Spread: UP {Number.isFinite(hedgePlan.upSpread) ? `${fmtNum(hedgePlan.upSpread * 100, 2)}¢` : "-"} · DOWN {Number.isFinite(hedgePlan.downSpread) ? `${fmtNum(hedgePlan.downSpread * 100, 2)}¢` : "-"}</div>
                         <div>Order prices: UP {hedgePlan.ok ? fmtUsd(hedgePlan.upPrice, 2) : "-"} · DOWN {hedgePlan.ok ? fmtUsd(hedgePlan.downPrice, 2) : "-"}</div>
                         <div>Status: {tradeDisabledReason || "Ready"}</div>
                       </div>

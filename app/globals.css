@@ -355,6 +355,10 @@ a{color:inherit}
   border-color: rgba(255,204,102,.4);
 }
 
+.tradeHistoryItem.hedged{
+  border-color: rgba(89,215,255,.35);
+}
+
 .tradeHistoryItem.skipped{
   border-color: rgba(255,204,102,.4);
 }
