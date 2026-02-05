@@ -79,7 +79,7 @@ const HEDGE_TAKER_BUFFER_CENTS = 10;
 const HEDGE_TAKER_MAX_PRICE = 0.99;
 const HEDGE_TAKER_MAX_RETRIES = 8;
 const HEDGE_TAKER_RETRY_DELAY_MS = 500;
-const HEDGE_TAKER_MIN_SHARES = 5;
+const HEDGE_TAKER_EPS = 1e-6;
 
 function normalizeStatus(value) {
   return String(value ?? "").toLowerCase();
@@ -957,21 +957,6 @@ export default function Page() {
       return { ok: false, message };
     }
 
-    if (hedgeSize < HEDGE_TAKER_MIN_SHARES) {
-      const message = `Hedge skipped; matched size ${fmtNum(hedgeSize, 4)} sh below ${HEDGE_TAKER_MIN_SHARES} sh minimum (triggered by ${filledLeg})`;
-      setTradeStatus({ type: "success", message, results });
-      if (source === "auto") {
-        setAutoStatus({ type: "success", message });
-      }
-      addHistoryEntry({
-        ...entryBase,
-        status: "success",
-        orderIds,
-        note: message
-      });
-      return { ok: false, message };
-    }
-
     if (!Number.isFinite(hedgeLimitPrice)) {
       const message = "Partial fill detected; unable to compute hedge order";
       setTradeStatus({ type: "error", message, results });
@@ -987,11 +972,15 @@ export default function Page() {
       return { ok: false, message };
     }
 
-    let hedgeRes = null;
-    let hedgeData = null;
+    let remaining = hedgeSize;
+    let totalMatched = 0;
     let lastError = null;
-    for (let attempt = 1; attempt <= HEDGE_TAKER_MAX_RETRIES; attempt += 1) {
+    const hedgeOrderIds = [];
+
+    for (let attempt = 1; attempt <= HEDGE_TAKER_MAX_RETRIES && remaining > HEDGE_TAKER_EPS; attempt += 1) {
       lastError = null;
+      let hedgeRes = null;
+      let hedgeData = null;
       try {
         hedgeRes = await fetch("/api/trade/limit", {
           method: "POST",
@@ -1000,7 +989,7 @@ export default function Page() {
             tokenId: hedgeTokenId,
             side: "BUY",
             price: hedgeLimitPrice,
-            size: hedgeSize,
+            size: remaining,
             orderType: "FAK",
             postOnly: false
           })
@@ -1010,47 +999,52 @@ export default function Page() {
         lastError = err?.message ?? String(err);
       }
 
-      if (hedgeRes?.ok) break;
-      if (!lastError) {
-        const status = hedgeRes?.status ?? "unknown";
-        lastError = hedgeData?.error || `Hedge order failed (HTTP ${status})`;
+      if (!hedgeRes?.ok) {
+        if (!lastError) {
+          const status = hedgeRes?.status ?? "unknown";
+          lastError = hedgeData?.error || `Hedge order failed (HTTP ${status})`;
+        }
+        if (attempt < HEDGE_TAKER_MAX_RETRIES) {
+          await sleep(HEDGE_TAKER_RETRY_DELAY_MS);
+          continue;
+        }
+        break;
       }
-      if (attempt < HEDGE_TAKER_MAX_RETRIES) {
+
+      const hedgeOrderId = hedgeData?.orderId;
+      if (hedgeOrderId) hedgeOrderIds.push(hedgeOrderId);
+      const hedgePoll = hedgeOrderId ? await pollOrderStatus(hedgeOrderId) : null;
+      const matched = Number.isFinite(hedgePoll?.matched) ? hedgePoll.matched : 0;
+      const missing = hedgePoll?.missing === true;
+      const filled = hedgePoll?.filled === true;
+
+      if (missing) {
+        totalMatched = hedgeSize;
+        remaining = 0;
+        break;
+      }
+
+      totalMatched = Math.min(hedgeSize, totalMatched + matched);
+      remaining = Math.max(0, hedgeSize - totalMatched);
+
+      if (!filled && hedgeOrderId) {
+        await fetch("/api/trade/cancel", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ orderId: hedgeOrderId })
+        });
+      }
+
+      if (remaining > HEDGE_TAKER_EPS && attempt < HEDGE_TAKER_MAX_RETRIES) {
         await sleep(HEDGE_TAKER_RETRY_DELAY_MS);
       }
     }
 
-    if (!hedgeRes?.ok) {
-      const message = `${lastError || "Hedge order failed"} (after ${HEDGE_TAKER_MAX_RETRIES} attempts)`;
-      setTradeStatus({ type: "error", message, results });
-      if (source === "auto") {
-        setAutoStatus({ type: "error", message });
-      }
-      addHistoryEntry({
-        ...entryBase,
-        status: "error",
-        orderIds,
-        error: message
-      });
-      return { ok: false, message };
-    }
-
-    const hedgeOrderId = hedgeData?.orderId;
-    const hedgePoll = hedgeOrderId ? await pollOrderStatus(hedgeOrderId) : null;
-    const hedgeFilled = hedgePoll?.filled;
-    const hedgeStatus = hedgePoll?.status || hedgeData?.status || "unknown";
-
-    if (!hedgeFilled && hedgeOrderId) {
-      await fetch("/api/trade/cancel", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ orderId: hedgeOrderId })
-      });
-    }
-
+    const hedgeFilled = remaining <= HEDGE_TAKER_EPS;
     const message = hedgeFilled
       ? "One leg filled; taker hedge filled"
-      : `One leg filled; taker hedge status ${hedgeStatus}`;
+      : `${lastError || "Taker hedge incomplete"} (hedged ${fmtNum(totalMatched, 4)} of ${fmtNum(hedgeSize, 4)} sh)`;
+
     setTradeStatus({ type: hedgeFilled ? "success" : "error", message, results });
     if (source === "auto") {
       setAutoStatus({ type: hedgeFilled ? "success" : "error", message });
@@ -1058,12 +1052,12 @@ export default function Page() {
     addHistoryEntry({
       ...entryBase,
       status: hedgeFilled ? "hedged" : "error",
-      orderIds: hedgeOrderId ? [...orderIds, hedgeOrderId] : orderIds,
+      orderIds: hedgeOrderIds.length ? [...orderIds, ...hedgeOrderIds] : orderIds,
       error: hedgeFilled ? undefined : message,
       note: note || `Hedge ${hedgeFilled ? "filled" : "attempted"} via taker limit`,
       filledLeg,
       hedgeLeg,
-      hedgeSize: filledSize,
+      hedgeSize: hedgeSize,
       hedgePrice: hedgeLimitPrice
     });
     return { ok: hedgeFilled, message };
