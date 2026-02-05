@@ -240,6 +240,8 @@ export default function TrendSizingPage() {
   const avgCostRef = useRef({ Up: 0, Down: 0 });
   const [avgCost, setAvgCost] = useState({ Up: 0, Down: 0 });
   const [positionNotional, setPositionNotional] = useState({ Up: 0, Down: 0 });
+  const cashFlowRef = useRef({ spent: 0, received: 0 });
+  const [cashFlow, setCashFlow] = useState({ spent: 0, received: 0 });
   const lastBboRef = useRef({ upBid: null, downBid: null });
   const [timeLeftSec, setTimeLeftSec] = useState(null);
   const timeLeftRef = useRef(null);
@@ -300,9 +302,8 @@ export default function TrendSizingPage() {
     const total = upPnl !== null && downPnl !== null ? upPnl + downPnl : null;
     const winner = upMark === null || downMark === null ? null : (upMark >= downMark ? "Up" : "Down");
     const winnerShares = winner === "Up" ? (positionsRef.current.Up ?? 0) : winner === "Down" ? (positionsRef.current.Down ?? 0) : 0;
-    const totalCost = (avgCostRef.current.Up ?? 0) * (positionsRef.current.Up ?? 0)
-      + (avgCostRef.current.Down ?? 0) * (positionsRef.current.Down ?? 0);
-    const settlementPnl = winner ? winnerShares - totalCost : null;
+    const netSpent = (cashFlowRef.current.spent ?? 0) - (cashFlowRef.current.received ?? 0);
+    const settlementPnl = winner ? winnerShares - netSpent : null;
 
     const entry = {
       id: `${slug ?? "window"}-${Date.now()}`,
@@ -318,7 +319,8 @@ export default function TrendSizingPage() {
         Down: (avgCostRef.current.Down ?? 0) * (positionsRef.current.Down ?? 0)
       },
       pnl: { up: upPnl, down: downPnl, total },
-      settlement: { winner, winnerShares, pnl: settlementPnl },
+      settlement: { winner, winnerShares, pnl: settlementPnl, netSpent },
+      cashFlow: { ...cashFlowRef.current, netSpent },
       marks: { up: upMark, down: downMark },
       trades: trades.length
     };
@@ -462,6 +464,7 @@ export default function TrendSizingPage() {
     const recordTrade = ({ outcome, side, price, ratio, momentum, threshold, reason, isHedge = false, hedgeOf = null, sizeOverride = null }) => {
       const size = sizeOverride ?? sizeFromRatio(ratio, threshold, side, outcome);
       if (!Number.isFinite(size) || size <= 0) return;
+      const notional = size * price;
       const prevPos = positionsRef.current[outcome] ?? 0;
       const prevAvg = avgCostRef.current[outcome] ?? 0;
       const nextPosValue = side === "BUY" ? prevPos + size : Math.max(0, prevPos - size);
@@ -474,6 +477,17 @@ export default function TrendSizingPage() {
       avgCostRef.current = nextAvgMap;
       setPositions(nextPos);
       setAvgCost(nextAvgMap);
+      const nextCashFlow = side === "BUY"
+        ? {
+            spent: (cashFlowRef.current.spent ?? 0) + notional,
+            received: cashFlowRef.current.received ?? 0
+          }
+        : {
+            spent: cashFlowRef.current.spent ?? 0,
+            received: (cashFlowRef.current.received ?? 0) + notional
+          };
+      cashFlowRef.current = nextCashFlow;
+      setCashFlow(nextCashFlow);
       setPositionNotional({
         Up: (nextAvgMap.Up ?? 0) * (nextPos.Up ?? 0),
         Down: (nextAvgMap.Down ?? 0) * (nextPos.Down ?? 0)
@@ -489,7 +503,7 @@ export default function TrendSizingPage() {
         ratio,
         momentum,
         size,
-        notional: size * price,
+        notional,
         threshold,
         reason,
         positionAfter: nextPos[outcome],
@@ -680,6 +694,8 @@ export default function TrendSizingPage() {
     avgCostRef.current = { Up: 0, Down: 0 };
     setAvgCost({ Up: 0, Down: 0 });
     setPositionNotional({ Up: 0, Down: 0 });
+    cashFlowRef.current = { spent: 0, received: 0 };
+    setCashFlow({ spent: 0, received: 0 });
     setTimeLeftSec(null);
     lastTradeRef.current = {};
   };
@@ -705,21 +721,22 @@ export default function TrendSizingPage() {
     const total = upPnl !== null && downPnl !== null ? upPnl + downPnl : null;
     const winner = upMark === null || downMark === null ? null : (upMark >= downMark ? "Up" : "Down");
     const winnerShares = winner === "Up" ? (positions.Up ?? 0) : winner === "Down" ? (positions.Down ?? 0) : 0;
-    const totalCost = (avgCost.Up ?? 0) * (positions.Up ?? 0) + (avgCost.Down ?? 0) * (positions.Down ?? 0);
-    const settlement = winner ? winnerShares - totalCost : null;
+    const netSpent = (cashFlow.spent ?? 0) - (cashFlow.received ?? 0);
+    const settlement = winner ? winnerShares - netSpent : null;
     const safeUp = upPnl ?? 0;
     const safeDown = downPnl ?? 0;
     const safeTotal = total ?? (safeUp + safeDown);
     const safeWinner = winner ?? (fallbackUp !== null && fallbackDown !== null ? (fallbackUp >= fallbackDown ? "Up" : "Down") : "Up");
     const safeSettlement = settlement ?? (safeWinner === "Up"
-      ? (positions.Up ?? 0) - totalCost
-      : (positions.Down ?? 0) - totalCost);
+      ? (positions.Up ?? 0) - netSpent
+      : (positions.Down ?? 0) - netSpent);
     return {
       upPnl,
       downPnl,
       total,
       settlement,
       winner,
+      netSpent,
       safe: {
         up: safeUp,
         down: safeDown,
@@ -728,7 +745,7 @@ export default function TrendSizingPage() {
         settlement: safeSettlement
       }
     };
-  }, [positions, avgCost, upBid, downBid]);
+  }, [positions, avgCost, upBid, downBid, cashFlow]);
 
   return (
     <div className="container">
@@ -862,6 +879,17 @@ export default function TrendSizingPage() {
                   </div>
                 </div>
                 <div className="kv">
+                  <div className="k">Net Spent</div>
+                  <div className="v mono">{fmtUsd(Number.isFinite(pnl.netSpent) ? pnl.netSpent : 0, 2)}</div>
+                </div>
+                <div className="kv">
+                  <div className="k">Gross Flow</div>
+                  <div className="v posSplit mono">
+                    <span>Spent {fmtUsd(cashFlow.spent, 2)}</span>
+                    <span>Received {fmtUsd(cashFlow.received, 2)}</span>
+                  </div>
+                </div>
+                <div className="kv">
                   <div className="k">Trades</div>
                   <div className="v mono">{fmtNum(trades.length, 0)}</div>
                 </div>
@@ -902,6 +930,14 @@ export default function TrendSizingPage() {
                         <div className="tradeHistoryRow">
                           <span>Winner: {entry.settlement?.winner ?? "-"}</span>
                           <span>Settlement PnL: {entry.settlement?.pnl === null ? "-" : fmtUsd(entry.settlement.pnl, 2)}</span>
+                        </div>
+                        <div className="tradeHistoryRow">
+                          <span>Net Spent: {entry.settlement?.netSpent === null || entry.settlement?.netSpent === undefined ? "-" : fmtUsd(entry.settlement.netSpent, 2)}</span>
+                          <span>Trades: {fmtNum(entry.trades, 0)}</span>
+                        </div>
+                        <div className="tradeHistoryRow">
+                          <span>Spent: {entry.cashFlow?.spent === null || entry.cashFlow?.spent === undefined ? "-" : fmtUsd(entry.cashFlow.spent, 2)}</span>
+                          <span>Received: {entry.cashFlow?.received === null || entry.cashFlow?.received === undefined ? "-" : fmtUsd(entry.cashFlow.received, 2)}</span>
                         </div>
                       </div>
                     ))}
