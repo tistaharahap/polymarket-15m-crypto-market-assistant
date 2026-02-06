@@ -496,9 +496,14 @@ export default function TrendSizingPage() {
   const liveReconcileBusyRef = useRef(false);
   const liveRetryAfterRef = useRef(0);
   const liveNoMatchRetryByOrderRef = useRef({});
+  const livePriceNudgeByOrderRef = useRef({});
   const lastWinnerSideRef = useRef(null);
   const positionsRef = useRef({ Up: 0, Down: 0 });
   const [positions, setPositions] = useState({ Up: 0, Down: 0 });
+
+  // Polled conditional token balances (preferred over WS-derived position state).
+  // Shape: { [tokenId]: { balance, allowance, available, ts } }
+  const conditionalAvailByTokenRef = useRef({});
   const avgCostRef = useRef({ Up: 0, Down: 0 });
   const [avgCost, setAvgCost] = useState({ Up: 0, Down: 0 });
   const [positionNotional, setPositionNotional] = useState({ Up: 0, Down: 0 });
@@ -511,6 +516,15 @@ export default function TrendSizingPage() {
 
   const activeTokens = meta?.polymarket?.tokens ?? null;
   const activeMarketSlug = meta?.polymarket?.marketSlug ?? null;
+
+  const BALANCE_POLL_MS = useMemo(() => {
+    const raw = Number(process.env.NEXT_PUBLIC_TSZ_BALANCE_POLL_MS ?? 1500);
+    return Number.isFinite(raw) && raw > 100 ? raw : 1500;
+  }, []);
+  const BALANCE_STALE_MS = useMemo(() => {
+    const raw = Number(process.env.NEXT_PUBLIC_TSZ_BALANCE_STALE_MS ?? 5000);
+    return Number.isFinite(raw) && raw > 0 ? raw : 5000;
+  }, []);
 
   const activeBbo = clobByAsset[activeAsset] ?? { marketSlug: null, up: null, down: null };
   const upBid = activeBbo?.up?.bid ?? null;
@@ -606,6 +620,64 @@ export default function TrendSizingPage() {
   useEffect(() => {
     ratioSeriesRef.current = ratioSeries;
   }, [ratioSeries]);
+
+  const refreshConditionalBalance = async (tokenId, { force = false } = {}) => {
+    const id = String(tokenId ?? "").trim();
+    if (!id) return null;
+
+    const existing = conditionalAvailByTokenRef.current?.[id];
+    const now = Date.now();
+    if (!force && existing?.ts && now - existing.ts < BALANCE_POLL_MS) return existing;
+
+    try {
+      const res = await fetch(`/api/trade/balance?tokenId=${encodeURIComponent(id)}`, { cache: "no-store" });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) return null;
+      const balance = Number(data?.balance ?? 0);
+      const allowance = Number(data?.allowance ?? 0);
+      const available = Math.max(0, Math.min(
+        Number.isFinite(balance) ? balance : 0,
+        Number.isFinite(allowance) ? allowance : 0
+      ));
+      const next = {
+        balance,
+        allowance,
+        available,
+        ts: now
+      };
+      conditionalAvailByTokenRef.current = {
+        ...(conditionalAvailByTokenRef.current ?? {}),
+        [id]: next
+      };
+      return next;
+    } catch {
+      return null;
+    }
+  };
+
+  // Keep polled token balances reasonably fresh while trading is active.
+  useEffect(() => {
+    if (!tradeActive) return;
+    const upTokenId = activeTokens?.upTokenId;
+    const downTokenId = activeTokens?.downTokenId;
+    if (!upTokenId && !downTokenId) return;
+
+    let cancelled = false;
+
+    const tick = async () => {
+      if (cancelled) return;
+      if (upTokenId) await refreshConditionalBalance(upTokenId);
+      if (downTokenId) await refreshConditionalBalance(downTokenId);
+    };
+
+    // prime immediately
+    tick();
+    const handle = setInterval(tick, BALANCE_POLL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(handle);
+    };
+  }, [tradeActive, activeTokens?.upTokenId, activeTokens?.downTokenId, BALANCE_POLL_MS]);
 
   useEffect(() => {
     let alive = true;
@@ -1029,14 +1101,49 @@ export default function TrendSizingPage() {
       hedgeOf = null,
       sizeOverride = null
     }) => {
-      const submitPrice = roundTo(price, 2);
+      const tokenId = outcome === "Up" ? activeTokens?.upTokenId : activeTokens?.downTokenId;
+
+      // Price rounding MUST be directional for marketability:
+      // - BUY should round UP (still crosses ask)
+      // - SELL should round DOWN (still crosses bid)
+      // Additionally, prefer using the actual BBO input (bid for SELL, ask for BUY) so the limit is marketable.
+      const bboPrice = side === "SELL" ? (outcome === "Up" ? upBid : downBid) : (outcome === "Up" ? upAsk : downAsk);
+      const basisPrice = Number.isFinite(bboPrice) ? bboPrice : price;
+      const baseSubmitPrice = side === "SELL" ? floorTo(basisPrice, 2) : ceilTo(basisPrice, 2);
+
+      // If we repeatedly get FAK no-match, nudge the limit price more aggressively in the marketable direction.
+      // SELL: nudge down, BUY: nudge up.
+      const retryKeyPreview = tokenId ? `${tokenId}:${side}` : null;
+      const nudge = retryKeyPreview ? Number(livePriceNudgeByOrderRef.current?.[retryKeyPreview] ?? 0) : 0;
+      const nudged = side === "SELL" ? (baseSubmitPrice - nudge) : (baseSubmitPrice + nudge);
+      const submitPrice = clamp(roundTo(nudged, 2), MIN_BUY_PRICE, MAX_BUY_PRICE);
+
+      // Ensure conditional balances are fresh for SELL sizing (polling is preferred over WS).
+      if (side === "SELL" && tokenId) {
+        const cached = conditionalAvailByTokenRef.current?.[tokenId];
+        const stale = !cached?.ts || (Date.now() - cached.ts > BALANCE_STALE_MS);
+        if (stale) {
+          await refreshConditionalBalance(tokenId, { force: true });
+        }
+      }
+
       const rawDesiredSize = sizeOverride ?? sizeFromRatio(ratio, threshold, side, outcome);
+
+      // For SELLs, prefer polled conditional token availability over local position tracking.
+      // User WS can be unreliable in some deployments, and local positions can drift.
+      const polledAvailable = side === "SELL" && tokenId
+        ? (conditionalAvailByTokenRef.current?.[tokenId]?.available ?? null)
+        : null;
+      const effectiveAvailable = side === "SELL"
+        ? (Number.isFinite(Number(polledAvailable)) ? Number(polledAvailable) : (positionsRef.current[outcome] ?? 0))
+        : (positionsRef.current[outcome] ?? 0);
+
       const desiredSize = normalizeTradeSize({
         rawSize: rawDesiredSize,
         side,
         price: submitPrice,
         maxSize,
-        available: positionsRef.current[outcome] ?? 0
+        available: effectiveAvailable
       });
       if (!Number.isFinite(desiredSize) || desiredSize <= 0) return null;
       const mode = liveAllowed ? "live" : "sim";
@@ -1062,7 +1169,6 @@ export default function TrendSizingPage() {
       }
 
       if (liveOrderBusyRef.current) return null;
-      const tokenId = outcome === "Up" ? activeTokens?.upTokenId : activeTokens?.downTokenId;
       if (!tokenId) {
         return recordTrade({
           outcome,
@@ -1192,12 +1298,24 @@ export default function TrendSizingPage() {
             const noMatchRetryAfter = Date.now() + LIVE_RETRY_BACKOFF_FAK_NO_MATCH_MS;
             const prevRetry = Number(liveNoMatchRetryByOrderRef.current[retryKey] ?? 0);
             liveNoMatchRetryByOrderRef.current[retryKey] = Math.max(prevRetry, noMatchRetryAfter);
+
+            const prevNudge = Number(livePriceNudgeByOrderRef.current?.[retryKey] ?? 0);
+            // Increase in 1-tick steps, capped.
+            livePriceNudgeByOrderRef.current = {
+              ...(livePriceNudgeByOrderRef.current ?? {}),
+              [retryKey]: clamp(prevNudge + 0.01, 0, 0.05)
+            };
           }
           if (isInsufficientBalanceAllowanceError(errorText)) {
             const balanceBackoffMs = side === "BUY"
               ? LIVE_RETRY_BACKOFF_COLLATERAL_MS
               : LIVE_RETRY_BACKOFF_CONDITIONAL_MS;
             liveRetryAfterRef.current = Math.max(liveRetryAfterRef.current, Date.now() + balanceBackoffMs);
+
+            if (side === "SELL" && tokenId) {
+              // Immediately refresh conditional availability so next attempt can clamp size correctly.
+              await refreshConditionalBalance(tokenId, { force: true });
+            }
           }
           if (isPriceOutOfRangeError(errorText)) {
             const invalidPriceRetryAfter = Date.now() + LIVE_RETRY_BACKOFF_INVALID_PRICE_MS;
@@ -1240,6 +1358,20 @@ export default function TrendSizingPage() {
           const noMatchRetryAfter = Date.now() + LIVE_RETRY_BACKOFF_FAK_NO_MATCH_MS;
           const prevRetry = Number(liveNoMatchRetryByOrderRef.current[retryKey] ?? 0);
           liveNoMatchRetryByOrderRef.current[retryKey] = Math.max(prevRetry, noMatchRetryAfter);
+
+          const prevNudge = Number(livePriceNudgeByOrderRef.current?.[retryKey] ?? 0);
+          livePriceNudgeByOrderRef.current = {
+            ...(livePriceNudgeByOrderRef.current ?? {}),
+            [retryKey]: clamp(prevNudge + 0.01, 0, 0.05)
+          };
+        } else {
+          // Reset nudge once we get a fill.
+          if (Number(livePriceNudgeByOrderRef.current?.[retryKey] ?? 0) > 0) {
+            livePriceNudgeByOrderRef.current = {
+              ...(livePriceNudgeByOrderRef.current ?? {}),
+              [retryKey]: 0
+            };
+          }
         }
         const entry = recordTrade({
           outcome,
