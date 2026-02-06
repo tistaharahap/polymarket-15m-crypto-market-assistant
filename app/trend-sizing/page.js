@@ -290,6 +290,21 @@ export default function TrendSizingPage() {
   const [winnerBuyRequireFavored, setWinnerBuyRequireFavored] = useState(true);
   const [endClampLoserBuySec, setEndClampLoserBuySec] = useState(DEFAULT_END_CLAMP_SEC);
   const [endClampWinnerSellSec, setEndClampWinnerSellSec] = useState(DEFAULT_END_CLAMP_SEC);
+  const [settlementBuffer, setSettlementBuffer] = useState(0);
+  const [settlementCapMult, setSettlementCapMult] = useState(0.95);
+  const [rebalanceMode, setRebalanceMode] = useState("sell-first");
+  const [maxRebalanceSizeMult, setMaxRebalanceSizeMult] = useState(1);
+  const [flipRebalanceEnabled, setFlipRebalanceEnabled] = useState(true);
+  const [rebalanceIgnoreCooldown, setRebalanceIgnoreCooldown] = useState(true);
+  const [lateRebalanceOverride, setLateRebalanceOverride] = useState(true);
+  const [dojiThreshold, setDojiThreshold] = useState(0.05);
+  const [dojiSizeMult, setDojiSizeMult] = useState(0.3);
+  const [dojiAllowBuys, setDojiAllowBuys] = useState(false);
+  const [lateDojiUnwind, setLateDojiUnwind] = useState(true);
+  const [lateWindowSec, setLateWindowSec] = useState(300);
+  const [lateBufferMult, setLateBufferMult] = useState(1.5);
+  const [lateCapMult, setLateCapMult] = useState(0.85);
+  const [lateCapFloor, setLateCapFloor] = useState(0.7);
   const [enableUpBuy, setEnableUpBuy] = useState(true);
   const [enableUpSell, setEnableUpSell] = useState(true);
   const [enableDownBuy, setEnableDownBuy] = useState(true);
@@ -302,6 +317,7 @@ export default function TrendSizingPage() {
   const lastTradeRef = useRef({});
   const [windowHistory, setWindowHistory] = useState([]);
   const lastWindowRef = useRef({ slug: null, start: null, end: null, asset: null });
+  const lastWinnerSideRef = useRef(null);
   const positionsRef = useRef({ Up: 0, Down: 0 });
   const [positions, setPositions] = useState({ Up: 0, Down: 0 });
   const avgCostRef = useRef({ Up: 0, Down: 0 });
@@ -347,6 +363,21 @@ export default function TrendSizingPage() {
     return Math.max(...scores);
   }, [upVolScore, downVolScore]);
 
+  const dojiDiff = useMemo(() => {
+    if (!Number.isFinite(upMid) || !Number.isFinite(downMid)) return null;
+    return Math.abs(upMid - downMid);
+  }, [upMid, downMid]);
+
+  const dojiActive = useMemo(() => {
+    if (!Number.isFinite(dojiDiff)) return false;
+    return dojiDiff <= dojiThreshold;
+  }, [dojiDiff, dojiThreshold]);
+
+  const lateWindowActive = useMemo(() => {
+    if (!Number.isFinite(timeLeftSec)) return false;
+    return timeLeftSec <= lateWindowSec;
+  }, [timeLeftSec, lateWindowSec]);
+
   const ratioTighten = 1
     + (Number.isFinite(volScore) ? volScore * VOL_RATIO_TIGHTEN : 0)
     + (Number.isFinite(timeFrac) ? (1 - timeFrac) * TIME_RATIO_TIGHTEN : 0);
@@ -365,6 +396,19 @@ export default function TrendSizingPage() {
     }
     return adjust;
   }, [volScore, timeFrac]);
+
+  const lateProgress = useMemo(() => {
+    if (!lateWindowActive || !Number.isFinite(timeLeftSec) || lateWindowSec <= 0) return 1;
+    return clamp(timeLeftSec / lateWindowSec, 0, 1);
+  }, [lateWindowActive, timeLeftSec, lateWindowSec]);
+  const bufferScale = lateWindowActive
+    ? 1 + (lateBufferMult - 1) * (1 - lateProgress)
+    : 1;
+  const capScale = lateWindowActive
+    ? lateCapMult + (1 - lateCapMult) * lateProgress
+    : 1;
+  const effectiveSettlementBuffer = settlementBuffer * bufferScale;
+  const effectiveCapMult = clamp(settlementCapMult * capScale, lateCapFloor, 2);
 
   const upSpreadLimit = useMemo(() => computeSpreadLimit(timeFrac, upVolScore), [timeFrac, upVolScore]);
   const downSpreadLimit = useMemo(() => computeSpreadLimit(timeFrac, downVolScore), [timeFrac, downVolScore]);
@@ -552,9 +596,14 @@ export default function TrendSizingPage() {
     if (!simEnabled) return;
 
     const sizeFromRatio = (ratio, threshold, side, outcome) => {
-      if (!Number.isFinite(ratio) || !Number.isFinite(threshold) || threshold <= 0) return baseSize * sizeAdjust;
+      const dojiMult = side === "BUY"
+        ? (dojiActive ? (dojiAllowBuys ? dojiSizeMult : 0) : 1)
+        : 1;
+      if (!Number.isFinite(ratio) || !Number.isFinite(threshold) || threshold <= 0) {
+        return baseSize * sizeAdjust * dojiMult;
+      }
       const multiplier = Math.max(1, ratio / threshold);
-      const sized = baseSize * sizeAdjust * Math.pow(multiplier, sizeScale);
+      const sized = baseSize * sizeAdjust * dojiMult * Math.pow(multiplier, sizeScale);
       const capped = Math.min(maxSize, Math.max(0, sized));
       if (side === "SELL") {
         const available = positionsRef.current[outcome] ?? 0;
@@ -681,11 +730,164 @@ export default function TrendSizingPage() {
       }
     ];
 
+    const winnerPriceUp = Number.isFinite(upBid) ? upBid : upMid;
+    const winnerPriceDown = Number.isFinite(downBid) ? downBid : downMid;
+    const winnerSide = Number.isFinite(winnerPriceUp) && Number.isFinite(winnerPriceDown)
+      ? (winnerPriceUp >= winnerPriceDown ? "Up" : "Down")
+      : null;
+    const loserSide = winnerSide ? (winnerSide === "Up" ? "Down" : "Up") : null;
+    const winnerShares = winnerSide ? (positionsRef.current[winnerSide] ?? 0) : 0;
+    const netSpentNow = (cashFlowRef.current.spent ?? 0) - (cashFlowRef.current.received ?? 0);
+    const settlementNow = winnerSide ? winnerShares - netSpentNow : null;
+    const capNow = winnerSide ? winnerShares * effectiveCapMult : null;
+    const prevWinnerSide = lastWinnerSideRef.current;
+    const winnerFlip = Boolean(
+      flipRebalanceEnabled
+        && lateWindowActive
+        && winnerSide
+        && prevWinnerSide
+        && prevWinnerSide !== winnerSide
+    );
+    if (winnerSide) lastWinnerSideRef.current = winnerSide;
+
+    const rebalanceBypassSpread = lateRebalanceOverride && lateWindowActive;
+    const dojiNeutralActive = lateDojiUnwind && lateWindowActive && dojiActive;
+
+    if (dojiNeutralActive) {
+      const upNotional = (avgCostRef.current.Up ?? 0) * (positionsRef.current.Up ?? 0);
+      const downNotional = (avgCostRef.current.Down ?? 0) * (positionsRef.current.Down ?? 0);
+      const unwindSide = upNotional >= downNotional ? "Up" : "Down";
+      const unwindBid = unwindSide === "Up" ? upBid : downBid;
+      const unwindShares = positionsRef.current[unwindSide] ?? 0;
+      const unwindSpreadOk = unwindSide === "Up" ? upSpreadOk : downSpreadOk;
+      const canUnwind = Number.isFinite(unwindBid)
+        && unwindBid > 0
+        && unwindShares > 0
+        && (rebalanceBypassSpread || unwindSpreadOk);
+      const rebalanceKey = "rebalance-doji";
+      if (canUnwind && (rebalanceIgnoreCooldown || shouldTrade(rebalanceKey))) {
+        const baseRebalanceSize = Math.min(maxSize, baseSize * sizeAdjust * maxRebalanceSizeMult);
+        const size = Math.max(0, Math.min(baseRebalanceSize, unwindShares));
+        if (size > 0) {
+          lastTradeRef.current[rebalanceKey] = nowSec;
+          const ratio = unwindSide === "Up" ? upSellRatio : downSellRatio;
+          const momentum = unwindSide === "Up"
+            ? computeMomentum(next.upSell, momentumWindowSec)
+            : computeMomentum(next.downSell, momentumWindowSec);
+          recordTrade({
+            outcome: unwindSide,
+            side: "SELL",
+            price: unwindBid,
+            ratio,
+            momentum,
+            threshold: "doji",
+            reason: "late doji unwind · neutralize inventory"
+          });
+          return;
+        }
+      }
+    }
+
+    const needsRebalance = winnerSide
+      && (winnerFlip
+        || (settlementNow !== null && settlementNow < effectiveSettlementBuffer)
+        || (capNow !== null && netSpentNow > capNow));
+
+    if (needsRebalance && loserSide) {
+      const loserShares = positionsRef.current[loserSide] ?? 0;
+      const winnerAsk = winnerSide === "Up" ? upAsk : downAsk;
+      const loserBid = loserSide === "Up" ? upBid : downBid;
+      const winnerSpreadOk = winnerSide === "Up" ? upSpreadOk : downSpreadOk;
+      const loserSpreadOk = loserSide === "Up" ? upSpreadOk : downSpreadOk;
+      const canBuyWinner = Number.isFinite(winnerAsk)
+        && winnerAsk >= MIN_BUY_PRICE
+        && winnerAsk < MAX_BUY_PRICE
+        && (rebalanceBypassSpread || winnerSpreadOk);
+      const canSellLoser = Number.isFinite(loserBid)
+        && loserBid > 0
+        && loserShares > 0
+        && (rebalanceBypassSpread || loserSpreadOk);
+      let action = null;
+      if (rebalanceMode === "buy-first") {
+        action = canBuyWinner ? "buy" : (canSellLoser ? "sell" : null);
+      } else if (rebalanceMode === "balanced") {
+        if (canBuyWinner && canSellLoser) {
+          const buyGain = Math.max(0, 1 - winnerAsk);
+          const sellGain = Math.max(0, loserBid);
+          action = buyGain >= sellGain ? "buy" : "sell";
+        } else {
+          action = canSellLoser ? "sell" : (canBuyWinner ? "buy" : null);
+        }
+      } else {
+        action = canSellLoser ? "sell" : (canBuyWinner ? "buy" : null);
+      }
+
+      if (action === "buy" && capNow !== null && Number.isFinite(winnerAsk) && effectiveCapMult <= winnerAsk && canSellLoser) {
+        action = "sell";
+      }
+
+      if (action) {
+        const rebalanceKey = `rebalance-${action}-${winnerSide}`;
+        if (rebalanceIgnoreCooldown || winnerFlip || shouldTrade(rebalanceKey)) {
+          const baseRebalanceSize = Math.min(maxSize, baseSize * sizeAdjust * maxRebalanceSizeMult);
+          const gapBuffer = settlementNow !== null ? Math.max(0, effectiveSettlementBuffer - settlementNow) : 0;
+          const gapCap = capNow !== null ? Math.max(0, netSpentNow - capNow) : 0;
+          if (action === "sell" && canSellLoser) {
+            const perShareGain = Math.max(1e-6, loserBid);
+            const neededShares = (Math.max(gapBuffer, gapCap) / perShareGain) || baseRebalanceSize;
+            const targetSize = Math.min(baseRebalanceSize, neededShares);
+            const size = Math.max(0, Math.min(targetSize, loserShares));
+            if (size > 0) {
+              lastTradeRef.current[rebalanceKey] = nowSec;
+              const ratio = loserSide === "Up" ? upSellRatio : downSellRatio;
+              const momentum = loserSide === "Up"
+                ? computeMomentum(next.upSell, momentumWindowSec)
+                : computeMomentum(next.downSell, momentumWindowSec);
+              recordTrade({
+                outcome: loserSide,
+                side: "SELL",
+                price: loserBid,
+                ratio,
+                momentum,
+                threshold: "rebalance",
+                reason: `rebalance sell loser · settle ${fmtUsd(settlementNow, 2)} < ${fmtUsd(effectiveSettlementBuffer, 2)} or netSpent ${fmtUsd(netSpentNow, 2)} > cap ${fmtUsd(capNow, 2)}`
+              });
+              return;
+            }
+          }
+          if (action === "buy" && canBuyWinner) {
+            const perShareGain = Math.max(1e-6, 1 - winnerAsk);
+            let neededShares = gapBuffer / perShareGain;
+            if (gapCap > 0 && effectiveCapMult > winnerAsk) {
+              neededShares = Math.max(neededShares, gapCap / Math.max(1e-6, effectiveCapMult - winnerAsk));
+            }
+            const targetSize = Math.min(baseRebalanceSize, neededShares || baseRebalanceSize);
+            lastTradeRef.current[rebalanceKey] = nowSec;
+            const ratio = winnerSide === "Up" ? upBuyRatio : downBuyRatio;
+            const momentum = winnerSide === "Up"
+              ? computeMomentum(next.upBuy, momentumWindowSec)
+              : computeMomentum(next.downBuy, momentumWindowSec);
+            recordTrade({
+              outcome: winnerSide,
+              side: "BUY",
+              price: winnerAsk,
+              ratio,
+              momentum,
+              threshold: "rebalance",
+              reason: `rebalance buy winner · settle ${fmtUsd(settlementNow, 2)} < ${fmtUsd(effectiveSettlementBuffer, 2)} or netSpent ${fmtUsd(netSpentNow, 2)} > cap ${fmtUsd(capNow, 2)}`
+            });
+            return;
+          }
+        }
+      }
+    }
+
     const outcomeLock = new Set();
     for (const signal of signals) {
       if (!signal.enabled) continue;
       if (!Number.isFinite(signal.price) || !Number.isFinite(signal.ratio)) continue;
       if (!signal.spreadOk) continue;
+      if (signal.side === "BUY" && dojiActive && !dojiAllowBuys) continue;
       if (signal.side === "BUY" && (signal.price >= MAX_BUY_PRICE || signal.price < MIN_BUY_PRICE)) continue;
       if (signal.side === "BUY" && requireFavoredPrimaryBuys && favoredOutcome && signal.outcome !== favoredOutcome) continue;
       if (signal.side === "SELL" && (positionsRef.current[signal.outcome] ?? 0) <= 0) continue;
@@ -773,10 +975,22 @@ export default function TrendSizingPage() {
     sizeScale,
     sizeAdjust,
     cooldownSec,
+    dojiActive,
+    dojiAllowBuys,
+    dojiSizeMult,
+    lateWindowActive,
+    flipRebalanceEnabled,
+    rebalanceIgnoreCooldown,
+    lateRebalanceOverride,
+    lateDojiUnwind,
     hedgeEnabled,
     hedgeRatioMin,
     hedgeRatioMax,
     hedgeSizeMult,
+    effectiveSettlementBuffer,
+    effectiveCapMult,
+    maxRebalanceSizeMult,
+    rebalanceMode,
     winnerBuyMinPrice,
     winnerBuyRequireFavored,
     endClampLoserBuySec,
@@ -785,6 +999,8 @@ export default function TrendSizingPage() {
     enableUpSell,
     enableDownBuy,
     enableDownSell,
+    upMid,
+    downMid,
     upSpread,
     downSpread,
     upSpreadLimit,
@@ -826,12 +1042,16 @@ export default function TrendSizingPage() {
     setCashFlow({ spent: 0, received: 0 });
     setTimeLeftSec(null);
     lastTradeRef.current = {};
+    lastWinnerSideRef.current = null;
   };
 
   const calcSizePreview = (ratio, threshold, side, outcome) => {
     if (!Number.isFinite(ratio) || !Number.isFinite(threshold) || threshold <= 0) return 0;
     const multiplier = Math.max(1, ratio / threshold);
-    const sized = Math.min(maxSize, baseSize * sizeAdjust * Math.pow(multiplier, sizeScale));
+    const dojiMult = side === "BUY"
+      ? (dojiActive ? (dojiAllowBuys ? dojiSizeMult : 0) : 1)
+      : 1;
+    const sized = Math.min(maxSize, baseSize * sizeAdjust * dojiMult * Math.pow(multiplier, sizeScale));
     if (side === "SELL") {
       const available = positions[outcome] ?? 0;
       return Math.max(0, Math.min(sized, available));
@@ -960,6 +1180,10 @@ export default function TrendSizingPage() {
                     <div className="tradeHistoryRow">
                       <span>Spread Max (Up/Down)</span>
                       <span className="mono">{fmtUsd(upSpreadLimit, 3)} / {fmtUsd(downSpreadLimit, 3)}</span>
+                    </div>
+                    <div className="tradeHistoryRow">
+                      <span>Doji (Δ)</span>
+                      <span className="mono">{dojiActive ? "Yes" : "No"} · {fmtUsd(dojiDiff, 3)} ≤ {fmtUsd(dojiThreshold, 3)}</span>
                     </div>
                   </div>
                 </div>
@@ -1310,6 +1534,199 @@ export default function TrendSizingPage() {
               </div>
               <div className="tradeControlHint" style={{ marginTop: 6 }}>
                 Allows BUY on the higher-priced side even when payout ratio is low.
+              </div>
+            </div>
+
+            <div className="tradeTableWrap">
+              <div className="cardTitle" style={{ marginBottom: 8 }}>Settlement Safety</div>
+              <div className="tradeControls">
+                <div className="tradeControl">
+                  <div className="tradeControlLabel">Settlement Buffer ($) {tooltip("Require Settlement PnL to stay above this buffer. Triggers rebalancing if breached.")}</div>
+                  <input
+                    className="tradeInput"
+                    type="number"
+                    step="0.1"
+                    value={settlementBuffer}
+                    onChange={(e) => {
+                      const next = Number(e.target.value);
+                      setSettlementBuffer(Number.isFinite(next) ? next : 0);
+                    }}
+                  />
+                </div>
+                <div className="tradeControl">
+                  <div className="tradeControlLabel">Cap Multiplier {tooltip("Cap net spent as a multiple of winner shares. netSpent must stay <= winnerShares * capMult.")}</div>
+                  <input
+                    className="tradeInput"
+                    type="number"
+                    step="0.01"
+                    value={settlementCapMult}
+                    onChange={(e) => {
+                      const next = Number(e.target.value);
+                      setSettlementCapMult(Number.isFinite(next) ? next : 0);
+                    }}
+                  />
+                </div>
+                <div className="tradeControl">
+                  <div className="tradeControlLabel">Rebalance Mode {tooltip("Controls whether rebalancing sells loser or buys winner first when Settlement PnL is negative.")}</div>
+                  <select
+                    className="tradeInput"
+                    value={rebalanceMode}
+                    onChange={(e) => setRebalanceMode(e.target.value)}
+                  >
+                    <option value="sell-first">Sell Loser First</option>
+                    <option value="buy-first">Buy Winner First</option>
+                    <option value="balanced">Balanced</option>
+                  </select>
+                </div>
+                <div className="tradeControl">
+                  <div className="tradeControlLabel">Max Rebalance Size (x) {tooltip("Cap rebalancing size as a multiple of Base Size.")}</div>
+                  <input
+                    className="tradeInput"
+                    type="number"
+                    step="0.1"
+                    value={maxRebalanceSizeMult}
+                    onChange={(e) => {
+                      const next = Number(e.target.value);
+                      setMaxRebalanceSizeMult(Number.isFinite(next) ? next : 1);
+                    }}
+                  />
+                </div>
+              </div>
+              <div className="toggleGrid" style={{ marginTop: 8 }}>
+                <label className="toggleRow">
+                  <input
+                    type="checkbox"
+                    checked={flipRebalanceEnabled}
+                    onChange={(e) => setFlipRebalanceEnabled(e.target.checked)}
+                  />
+                  <span>Flip Rebalance {tooltip("When the favored side flips late, force an immediate rebalance.")}</span>
+                </label>
+                <label className="toggleRow">
+                  <input
+                    type="checkbox"
+                    checked={rebalanceIgnoreCooldown}
+                    onChange={(e) => setRebalanceIgnoreCooldown(e.target.checked)}
+                  />
+                  <span>Ignore Rebalance Cooldown {tooltip("Allow rebalances to fire without waiting for cooldown.")}</span>
+                </label>
+              </div>
+              <div className="tradeControlHint" style={{ marginTop: 6 }}>
+                Rebalances inventory to keep Settlement PnL ≥ buffer and netSpent within the cap.
+              </div>
+            </div>
+
+            <div className="tradeTableWrap">
+              <div className="cardTitle" style={{ marginBottom: 8 }}>Doji Control</div>
+              <div className="tradeControls">
+                <div className="tradeControl">
+                  <div className="tradeControlLabel">Doji Threshold (Δ) {tooltip("Treat market as doji if |Up mid - Down mid| <= threshold.")}</div>
+                  <input
+                    className="tradeInput"
+                    type="number"
+                    step="0.01"
+                    value={dojiThreshold}
+                    onChange={(e) => {
+                      const next = Number(e.target.value);
+                      setDojiThreshold(Number.isFinite(next) ? next : 0);
+                    }}
+                  />
+                </div>
+                <div className="tradeControl">
+                  <div className="tradeControlLabel">Doji Size Mult {tooltip("Scale BUY size when in doji regime (SELLs unaffected).")}</div>
+                  <input
+                    className="tradeInput"
+                    type="number"
+                    step="0.05"
+                    value={dojiSizeMult}
+                    onChange={(e) => {
+                      const next = Number(e.target.value);
+                      setDojiSizeMult(Number.isFinite(next) ? next : 0);
+                    }}
+                  />
+                </div>
+              </div>
+              <div className="toggleGrid" style={{ marginTop: 8 }}>
+                <label className="toggleRow">
+                  <input type="checkbox" checked={dojiAllowBuys} onChange={(e) => setDojiAllowBuys(e.target.checked)} />
+                  <span>Allow Buys in Doji {tooltip("When off, BUYs are blocked in a doji regime unless rebalancing.")}</span>
+                </label>
+              </div>
+            </div>
+
+            <div className="tradeTableWrap">
+              <div className="cardTitle" style={{ marginBottom: 8 }}>Late Window Scaling</div>
+              <div className="tradeControls">
+                <div className="tradeControl">
+                  <div className="tradeControlLabel">Late Window (s) {tooltip("Time-to-expiry threshold for late-window safety adjustments.")}</div>
+                  <input
+                    className="tradeInput"
+                    type="number"
+                    min="0"
+                    step="1"
+                    value={lateWindowSec}
+                    onChange={(e) => {
+                      const next = Number(e.target.value);
+                      setLateWindowSec(Number.isFinite(next) && next >= 0 ? next : 0);
+                    }}
+                  />
+                </div>
+                <div className="tradeControl">
+                  <div className="tradeControlLabel">Late Buffer Mult {tooltip("Multiplier applied to Settlement Buffer during late window.")}</div>
+                  <input
+                    className="tradeInput"
+                    type="number"
+                    step="0.1"
+                    value={lateBufferMult}
+                    onChange={(e) => {
+                      const next = Number(e.target.value);
+                      setLateBufferMult(Number.isFinite(next) ? next : 1);
+                    }}
+                  />
+                </div>
+                <div className="tradeControl">
+                  <div className="tradeControlLabel">Late Cap Mult {tooltip("Multiplier applied to net spent cap during late window (lower = tighter).")}</div>
+                  <input
+                    className="tradeInput"
+                    type="number"
+                    step="0.05"
+                    value={lateCapMult}
+                    onChange={(e) => {
+                      const next = Number(e.target.value);
+                      setLateCapMult(Number.isFinite(next) ? next : 1);
+                    }}
+                  />
+                </div>
+                <div className="tradeControl">
+                  <div className="tradeControlLabel">Late Cap Floor {tooltip("Minimum cap multiplier allowed during late window.")}</div>
+                  <input
+                    className="tradeInput"
+                    type="number"
+                    step="0.05"
+                    value={lateCapFloor}
+                    onChange={(e) => {
+                      const next = Number(e.target.value);
+                      setLateCapFloor(Number.isFinite(next) ? next : 0);
+                    }}
+                  />
+                </div>
+              </div>
+              <div className="toggleGrid" style={{ marginTop: 8 }}>
+                <label className="toggleRow">
+                  <input
+                    type="checkbox"
+                    checked={lateRebalanceOverride}
+                    onChange={(e) => setLateRebalanceOverride(e.target.checked)}
+                  />
+                  <span>Late Rebalance Override {tooltip("Bypass spread/doji gates for rebalancing during the late window.")}</span>
+                </label>
+                <label className="toggleRow">
+                  <input
+                    type="checkbox"
+                    checked={lateDojiUnwind}
+                    onChange={(e) => setLateDojiUnwind(e.target.checked)}
+                  />
+                  <span>Late Doji Unwind {tooltip("During late doji, sell down the larger side to neutralize inventory.")}</span>
+                </label>
               </div>
             </div>
 
