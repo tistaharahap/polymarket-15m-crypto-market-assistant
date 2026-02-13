@@ -1,4 +1,4 @@
-import { clamp } from "../utils.js";
+import { clamp } from "../utils";
 
 export function computeEdge({ modelUp, modelDown, marketYes, marketNo }) {
   if (marketYes === null || marketNo === null) {

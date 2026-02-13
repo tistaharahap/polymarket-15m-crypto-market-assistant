@@ -1,5 +1,5 @@
 import { ethers } from "ethers";
-import { CONFIG } from "../config.js";
+import { CONFIG } from "../config";
 
 const AGGREGATOR_ABI = [
   "function latestRoundData() view returns (uint80 roundId,int256 answer,uint256 startedAt,uint256 updatedAt,uint80 answeredInRound)",

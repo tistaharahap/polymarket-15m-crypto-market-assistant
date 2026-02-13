@@ -1,5 +1,7 @@
 import "./globals.css";
 import { IBM_Plex_Sans, DM_Serif_Display } from "next/font/google";
+import type { Metadata } from "next";
+import type { ReactNode } from "react";
 
 const body = IBM_Plex_Sans({
   subsets: ["latin"],
@@ -13,12 +15,12 @@ const display = DM_Serif_Display({
   variable: "--font-display"
 });
 
-export const metadata = {
+export const metadata: Metadata = {
   title: "BTC 15m Assistant",
   description: "A web UI for the Polymarket BTC 15m assistant"
 };
 
-export default function RootLayout({ children }) {
+export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <html lang="en" className={`${body.variable} ${display.variable}`}>
       <body>

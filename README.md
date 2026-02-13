@@ -15,8 +15,8 @@ Supported tabs (UI order): **BTC, ETH, XRP, SOL**.
 
 ### Run (local dev)
 ```bash
-npm install
-npm run web
+bun install
+bun run web
 ```
 Open: <http://localhost:3000>
 
@@ -25,11 +25,11 @@ Use build + start (do not run `next dev` in production).
 
 - Build command:
   ```bash
-  npm run web:build
+  bun run web:build
   ```
 - Start command:
   ```bash
-  npm run web:start
+  bun run web:start
   ```
 
 ### Basic HTTP Auth (optional)
@@ -45,7 +45,7 @@ Example:
 ```bash
 export BASIC_AUTH_USER="tista"
 export BASIC_AUTH_PASS="change-me"
-npm run web
+bun run web
 ```
 
 ### Endpoints
@@ -78,7 +78,7 @@ npm run web
 
 The original CLI remains available:
 ```bash
-npm start
+bun run start
 ```
 
 ---

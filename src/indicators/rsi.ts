@@ -1,4 +1,4 @@
-import { clamp } from "../utils.js";
+import { clamp } from "../utils";
 
 export function computeRsi(closes, period) {
   if (!Array.isArray(closes) || closes.length < period + 1) return null;

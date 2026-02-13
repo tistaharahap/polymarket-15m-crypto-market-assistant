@@ -21,12 +21,13 @@ function toFiniteNumber(x) {
   return Number.isFinite(n) ? n : null;
 }
 
-export function connectPolymarketChainlinkWs({
-  wsUrl = "wss://ws-live-data.polymarket.com",
-  symbolIncludes = "btc",
-  onTick,
-  onStatus
-} = {}) {
+export function connectPolymarketChainlinkWs(opts: any = {}) {
+  const {
+    wsUrl = "wss://ws-live-data.polymarket.com",
+    symbolIncludes = "btc",
+    onTick,
+    onStatus
+  } = opts;
   let ws = null;
   let closed = false;
   let reconnectMs = 500;

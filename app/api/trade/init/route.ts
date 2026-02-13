@@ -1,5 +1,5 @@
-import { getClobContext } from "../../../../src/trading/index.js";
-import { ensureTradingEnabled, jsonError, jsonResponse } from "../utils.js";
+import { getClobContext } from "../../../../src/trading/index";
+import { ensureTradingEnabled, jsonError, jsonResponse } from "../utils";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";

@@ -1,8 +1,8 @@
-import { computeSnapshot } from "../../../src/web/snapshot.js";
+import { computeSnapshot } from "../../../src/web/snapshot";
 
 export const dynamic = "force-dynamic";
 
-function sseEncode({ event, data, id } = {}) {
+function sseEncode({ event, data, id }: { event?: string; data?: unknown; id?: string | number } = {}) {
   let out = "";
   if (id !== undefined && id !== null) out += `id: ${id}\n`;
   if (event) out += `event: ${event}\n`;
@@ -13,7 +13,7 @@ function sseEncode({ event, data, id } = {}) {
   return out;
 }
 
-export async function GET(req) {
+export async function GET(req: Request) {
   const encoder = new TextEncoder();
   let timer = null;
   let counter = 0;

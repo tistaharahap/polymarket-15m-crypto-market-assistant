@@ -1,6 +1,6 @@
 import WebSocket from "ws";
-import { CONFIG } from "../config.js";
-import { wsAgentForUrl } from "../net/proxy.js";
+import { CONFIG } from "../config";
+import { wsAgentForUrl } from "../net/proxy";
 
 function toNumber(x) {
   const n = Number(x);
@@ -12,7 +12,8 @@ function buildWsUrl(symbol) {
   return `wss://stream.binance.com:9443/ws/${s}@trade`;
 }
 
-export function startBinanceTradeStream({ symbol = CONFIG.symbol, onUpdate } = {}) {
+export function startBinanceTradeStream(opts: any = {}) {
+  const { symbol = CONFIG.symbol, onUpdate } = opts;
   let ws = null;
   let closed = false;
   let reconnectMs = 500;

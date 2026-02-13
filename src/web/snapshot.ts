@@ -1,10 +1,10 @@
-import { CONFIG } from "../config.js";
-import { applyGlobalProxyFromEnv } from "../net/proxy.js";
+import { CONFIG } from "../config";
+import { applyGlobalProxyFromEnv } from "../net/proxy";
 import {
   fetchMarketBySlug,
   fetchActiveMarkets,
   pickLatestLiveMarket
-} from "../data/polymarket.js";
+} from "../data/polymarket";
 
 // SERVER SNAPSHOT (LIGHTWEIGHT)
 //
@@ -132,7 +132,7 @@ function pickOutcomeTokenIds(market) {
   return { upTokenId, downTokenId };
 }
 
-export async function computeSnapshot({ asset } = {}) {
+export async function computeSnapshot({ asset }: { asset?: string } = {}) {
   applyGlobalProxyFromEnv();
 
   const a = normalizeAsset(asset);

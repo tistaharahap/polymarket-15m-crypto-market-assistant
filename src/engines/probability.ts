@@ -1,4 +1,4 @@
-import { clamp } from "../utils.js";
+import { clamp } from "../utils";
 
 export function scoreDirection(inputs) {
   const {

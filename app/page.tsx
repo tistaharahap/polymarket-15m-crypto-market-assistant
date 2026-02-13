@@ -80,6 +80,7 @@ const HEDGE_TAKER_MAX_PRICE = 0.99;
 const HEDGE_TAKER_MAX_RETRIES = 8;
 const HEDGE_TAKER_RETRY_DELAY_MS = 500;
 const HEDGE_TAKER_EPS = 1e-6;
+type TradeApiResult = { orderId?: string; status?: string; [key: string]: any };
 
 function normalizeStatus(value) {
   return String(value ?? "").toLowerCase();
@@ -910,7 +911,23 @@ export default function Page() {
     });
   }
 
-  async function hedgeWithTaker({ filledTokenId, filledSize, orderIds, results, entryBase, source, note }) {
+  async function hedgeWithTaker({
+    filledTokenId,
+    filledSize,
+    orderIds,
+    results,
+    entryBase,
+    source,
+    note
+  }: {
+    filledTokenId: string;
+    filledSize: number;
+    orderIds: string[];
+    results: Record<string, TradeApiResult>;
+    entryBase: any;
+    source: string;
+    note?: string;
+  }) {
     const upTokenId = activeTokens?.upTokenId;
     const downTokenId = activeTokens?.downTokenId;
     const hedgeTokenId = filledTokenId === upTokenId ? downTokenId : upTokenId;
@@ -1128,7 +1145,7 @@ export default function Page() {
         { tokenId: upTokenId, price: hedgePlan.upPrice, side: "BUY" }
       ];
 
-    const results = {};
+    const results: Record<string, TradeApiResult> = {};
     const orderType = "GTC";
 
     try {

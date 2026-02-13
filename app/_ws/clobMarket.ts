@@ -41,12 +41,13 @@ function computeBestFromBook(msg) {
   return { bestBid, bestAsk };
 }
 
-export function connectClobMarketWs({
-  wsUrl = "wss://ws-subscriptions-clob.polymarket.com/ws/market",
-  assetIds = [],
-  onBestBidAsk,
-  onStatus
-} = {}) {
+export function connectClobMarketWs(opts: any = {}) {
+  let {
+    wsUrl = "wss://ws-subscriptions-clob.polymarket.com/ws/market",
+    assetIds = [],
+    onBestBidAsk,
+    onStatus
+  } = opts;
   let ws = null;
   let closed = false;
   let reconnectMs = 500;
@@ -151,7 +152,7 @@ export function connectClobMarketWs({
   connect();
 
   return {
-    updateAssetIds(nextIds) {
+    updateAssetIds(nextIds: any) {
       assetIds = nextIds;
       // Resubscribe (safe even if not open yet)
       subscribe();

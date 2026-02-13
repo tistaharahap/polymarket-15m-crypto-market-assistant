@@ -1,8 +1,8 @@
-import { CONFIG } from "./config.js";
-import { fetchKlines, fetchLastPrice } from "./data/binance.js";
-import { fetchChainlinkBtcUsd } from "./data/chainlink.js";
-import { startChainlinkPriceStream } from "./data/chainlinkWs.js";
-import { startPolymarketChainlinkPriceStream } from "./data/polymarketLiveWs.js";
+import { CONFIG } from "./config";
+import { fetchKlines, fetchLastPrice } from "./data/binance";
+import { fetchChainlinkBtcUsd } from "./data/chainlink";
+import { startChainlinkPriceStream } from "./data/chainlinkWs";
+import { startPolymarketChainlinkPriceStream } from "./data/polymarketLiveWs";
 import {
   fetchMarketBySlug,
   fetchLiveEventsBySeriesId,
@@ -11,20 +11,20 @@ import {
   fetchClobPrice,
   fetchOrderBook,
   summarizeOrderBook
-} from "./data/polymarket.js";
-import { computeSessionVwap, computeVwapSeries } from "./indicators/vwap.js";
-import { computeRsi, sma, slopeLast } from "./indicators/rsi.js";
-import { computeMacd } from "./indicators/macd.js";
-import { computeHeikenAshi, countConsecutive } from "./indicators/heikenAshi.js";
-import { detectRegime } from "./engines/regime.js";
-import { scoreDirection, applyTimeAwareness } from "./engines/probability.js";
-import { computeEdge, decide } from "./engines/edge.js";
-import { appendCsvRow, formatNumber, formatPct, getCandleWindowTiming, sleep } from "./utils.js";
-import { startBinanceTradeStream } from "./data/binanceWs.js";
+} from "./data/polymarket";
+import { computeSessionVwap, computeVwapSeries } from "./indicators/vwap";
+import { computeRsi, sma, slopeLast } from "./indicators/rsi";
+import { computeMacd } from "./indicators/macd";
+import { computeHeikenAshi, countConsecutive } from "./indicators/heikenAshi";
+import { detectRegime } from "./engines/regime";
+import { scoreDirection, applyTimeAwareness } from "./engines/probability";
+import { computeEdge, decide } from "./engines/edge";
+import { appendCsvRow, formatNumber, formatPct, getCandleWindowTiming, sleep } from "./utils";
+import { startBinanceTradeStream } from "./data/binanceWs";
 import fs from "node:fs";
 import path from "node:path";
 import readline from "node:readline";
-import { applyGlobalProxyFromEnv } from "./net/proxy.js";
+import { applyGlobalProxyFromEnv } from "./net/proxy";
 
 function countVwapCrosses(closes, vwapSeries, lookback) {
   if (closes.length < lookback || vwapSeries.length < lookback) return null;

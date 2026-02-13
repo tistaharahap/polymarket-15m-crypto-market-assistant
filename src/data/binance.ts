@@ -1,4 +1,4 @@
-import { CONFIG } from "../config.js";
+import { CONFIG } from "../config";
 
 function toNumber(x) {
   const n = Number(x);

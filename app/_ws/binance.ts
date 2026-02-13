@@ -43,13 +43,14 @@ export async function seedKlines({ symbol, interval = "1m", limit = 240, baseUrl
   }));
 }
 
-export function connectBinanceWs({
-  symbol, // e.g. BTCUSDT
-  interval = "1m",
-  onKline,
-  onTrade,
-  onStatus
-} = {}) {
+export function connectBinanceWs(opts: any = {}) {
+  const {
+    symbol, // e.g. BTCUSDT
+    interval = "1m",
+    onKline,
+    onTrade,
+    onStatus
+  } = opts;
   let ws = null;
   let closed = false;
   let reconnectMs = 500;

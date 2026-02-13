@@ -6,8 +6,8 @@ import {
   AssetType
 } from "@polymarket/clob-client";
 import { Wallet } from "ethers";
-import { TRADING_CONFIG as config } from "./config.js";
-import { formatError, logger } from "./logger.js";
+import { TRADING_CONFIG as config } from "./config";
+import { formatError, logger } from "./logger";
 
 /**
  * NOTE:
@@ -30,7 +30,7 @@ async function initClobContext() {
     throw new Error("POLY_PRIVATE_KEY is required for trading");
   }
 
-  const signer = new Wallet(config.privateKey);
+  const signer: any = new Wallet(config.privateKey);
   // ethers v6 uses signTypedData; clob-client expects _signTypedData (v5).
   if (typeof signer._signTypedData !== "function" && typeof signer.signTypedData === "function") {
     signer._signTypedData = (domain, types, value) => signer.signTypedData(domain, types, value);
@@ -47,7 +47,7 @@ async function initClobContext() {
   const seedClient = new ClobClient(
     config.clobApi,
     Chain.POLYGON,
-    signer,
+    signer as any,
     undefined,
     signatureType,
     funderAddress,
@@ -67,7 +67,7 @@ async function initClobContext() {
   const client = new ClobClient(
     config.clobApi,
     Chain.POLYGON,
-    signer,
+    signer as any,
     creds,
     signatureType,
     funderAddress,
@@ -295,7 +295,7 @@ export async function cancelOrder(orderId) {
   }
 }
 
-export async function fetchCollateralBalance(ctx) {
+export async function fetchCollateralBalance(ctx = null) {
   const clob = ctx ?? (await getClobContext());
   if (!clob) return null;
 

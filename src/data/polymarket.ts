@@ -1,4 +1,4 @@
-import { CONFIG } from "../config.js";
+import { CONFIG } from "../config";
 
 function toNumber(x) {
   const n = Number(x);
@@ -65,7 +65,7 @@ export function flattenEventMarkets(events) {
   return out;
 }
 
-export async function fetchActiveMarkets({ limit = 200, offset = 0 } = {}) {
+export async function fetchActiveMarkets({ limit = 200, offset = 0 }: { limit?: number; offset?: number } = {}) {
   const url = new URL("/markets", CONFIG.gammaBaseUrl);
   url.searchParams.set("active", "true");
   url.searchParams.set("closed", "false");
@@ -129,7 +129,10 @@ function marketHasSeriesSlug(market, seriesSlug) {
   return false;
 }
 
-export function filterBtcUpDown15mMarkets(markets, { seriesSlug, slugPrefix } = {}) {
+export function filterBtcUpDown15mMarkets(
+  markets,
+  { seriesSlug, slugPrefix }: { seriesSlug?: string; slugPrefix?: string } = {}
+) {
   const prefix = (slugPrefix ?? "").toLowerCase();
   const wantedSeries = (seriesSlug ?? "").toLowerCase();
 

@@ -3,11 +3,18 @@
   "version": "0.1.0",
   "type": "module",
   "private": true,
+  "packageManager": "bun@1.2.20",
   "scripts": {
-    "start": "node src/index.js",
+    "start": "bun src/index.ts",
     "web": "next dev",
     "web:build": "next build",
     "web:start": "next start"
+  },
+  "devDependencies": {
+    "@types/node": "^24.3.3",
+    "@types/react": "^19.1.12",
+    "@types/react-dom": "^19.1.9",
+    "typescript": "^5.9.2"
   },
   "dependencies": {
     "@polymarket/clob-client": "^5.2.0",

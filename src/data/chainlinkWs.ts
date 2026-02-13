@@ -1,7 +1,7 @@
 import WebSocket from "ws";
 import { ethers } from "ethers";
-import { CONFIG } from "../config.js";
-import { wsAgentForUrl } from "../net/proxy.js";
+import { CONFIG } from "../config";
+import { wsAgentForUrl } from "../net/proxy";
 
 const ANSWER_UPDATED_TOPIC0 = ethers.id("AnswerUpdated(int256,uint256,uint256)");
 
@@ -24,11 +24,12 @@ function toNumber(x) {
   return Number.isFinite(n) ? n : null;
 }
 
-export function startChainlinkPriceStream({
-  aggregator = CONFIG.chainlink.btcUsdAggregator,
-  decimals = 8,
-  onUpdate
-} = {}) {
+export function startChainlinkPriceStream(opts: any = {}) {
+  const {
+    aggregator = CONFIG.chainlink.btcUsdAggregator,
+    decimals = 8,
+    onUpdate
+  } = opts;
   const wssUrls = getWssCandidates();
   if (!aggregator || wssUrls.length === 0) {
     return {

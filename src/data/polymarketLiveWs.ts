@@ -1,6 +1,6 @@
 import WebSocket from "ws";
-import { CONFIG } from "../config.js";
-import { wsAgentForUrl } from "../net/proxy.js";
+import { CONFIG } from "../config";
+import { wsAgentForUrl } from "../net/proxy";
 
 function safeJsonParse(s) {
   try {
@@ -22,11 +22,12 @@ function toFiniteNumber(x) {
   return Number.isFinite(n) ? n : null;
 }
 
-export function startPolymarketChainlinkPriceStream({
-  wsUrl = CONFIG.polymarket.liveDataWsUrl,
-  symbolIncludes = "btc",
-  onUpdate
-} = {}) {
+export function startPolymarketChainlinkPriceStream(opts: any = {}) {
+  const {
+    wsUrl = CONFIG.polymarket.liveDataWsUrl,
+    symbolIncludes = "btc",
+    onUpdate
+  } = opts;
   if (!wsUrl) {
     return {
       getLast() {

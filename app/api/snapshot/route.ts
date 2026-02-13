@@ -1,4 +1,4 @@
-import { computeSnapshot } from "../../../src/web/snapshot.js";
+import { computeSnapshot } from "../../../src/web/snapshot";
 
 export const dynamic = "force-dynamic";
 

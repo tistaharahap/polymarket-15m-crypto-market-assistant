@@ -1,10 +1,10 @@
-import { fetchOrder } from "../../../../src/trading/index.js";
+import { fetchOrder } from "../../../../src/trading/index";
 import {
   ensureTradingEnabled,
   jsonError,
   jsonResponse,
   parseString
-} from "../utils.js";
+} from "../utils";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
